@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from unittest import mock
 
 from test.helpers import make_item
+from ai_labelling.models import IssueTypeDefinition
 from ai_labelling.github_client import (
     GitHubClient,
     parse_github_timestamp,
@@ -415,3 +416,82 @@ class GitHubClientTests(  # pylint: disable=too-many-public-methods
 
         with self.assertRaisesRegex(RuntimeError, "unexpected issue entry"):
             work_item_from_search_result("not a dict", "issue")
+
+    def test_work_item_from_search_result_extracts_issue_type(self):
+        item = work_item_from_search_result(
+            {
+                "number": 1,
+                "title": "T",
+                "body": "",
+                "state": "open",
+                "labels": [],
+                "html_url": "",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "created_at": "2026-05-01T00:00:00Z",
+                "user": {"login": "octocat"},
+                "type": {"id": 42, "name": "Bug"},
+            },
+            "issue",
+        )
+        self.assertEqual(item.issue_type, "Bug")
+
+    def test_work_item_from_search_result_no_issue_type_is_none(self):
+        item = work_item_from_search_result(
+            {
+                "number": 1,
+                "title": "T",
+                "body": "",
+                "state": "open",
+                "labels": [],
+                "html_url": "",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "created_at": "2026-05-01T00:00:00Z",
+                "user": {"login": "octocat"},
+            },
+            "issue",
+        )
+        self.assertIsNone(item.issue_type)
+
+    def test_list_issue_types_returns_empty_on_failure(self):
+        failed = mock.Mock(returncode=1, stdout="", stderr="404")
+        with mock.patch("ai_labelling.github_client.run", return_value=failed):
+            result = self.client.list_issue_types("llvm/llvm-project")
+        self.assertEqual(result, [])
+
+    def test_list_issue_types_parses_org_response(self):
+        payload = '[{"id": 1, "name": "Bug", "description": "A bug"}]'
+        ok = mock.Mock(returncode=0, stdout=payload, stderr="")
+        with mock.patch("ai_labelling.github_client.run", return_value=ok):
+            result = self.client.list_issue_types("llvm/llvm-project")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].name, "Bug")
+        self.assertEqual(result[0].description, "A bug")
+        self.assertEqual(result[0].type_id, 1)
+
+    def test_set_issue_type_uses_id_when_available(self):
+        item = make_item(7, "Seven")
+        it = IssueTypeDefinition(name="Bug", description="", type_id=42)
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch(
+            "ai_labelling.github_client.run", return_value=completed
+        ) as run_mock:
+            self.client.set_issue_type("llvm/llvm-project", item, it)
+        run_mock.assert_called_once_with(
+            (
+                "gh", "api", "--method", "PATCH",
+                "repos/llvm/llvm-project/issues/7",
+                "--input", "-",
+            ),
+            input_text='{"type": {"id": 42}}',
+        )
+
+    def test_set_issue_type_falls_back_to_name_when_id_zero(self):
+        item = make_item(7, "Seven")
+        it = IssueTypeDefinition(name="Task", description="")
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch(
+            "ai_labelling.github_client.run", return_value=completed
+        ) as run_mock:
+            self.client.set_issue_type("llvm/llvm-project", item, it)
+        _args, kwargs = run_mock.call_args
+        self.assertIn('"name": "Task"', kwargs["input_text"])

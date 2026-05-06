@@ -19,6 +19,7 @@ class WorkItem:  # pylint: disable=too-many-instance-attributes
     created_at: str
     author_login: str
     kind: str
+    issue_type: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -43,11 +44,12 @@ class SearchOptions:
 
 @dataclass(frozen=True)
 class LabelSuggestion:
-    """Normalized label suggestions produced by the AI backend."""
+    """Normalised label and issue-type suggestions produced by the AI."""
 
     add_labels: List[str]
     remove_labels: List[str]
     reason: str
+    issue_type: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,15 @@ class LabelDefinition:
 
     name: str
     description: str
+
+
+@dataclass(frozen=True)
+class IssueTypeDefinition:
+    """Repository issue-type metadata available to the AI backend."""
+
+    name: str
+    description: str
+    type_id: int = 0
 
 
 @dataclass(frozen=True)

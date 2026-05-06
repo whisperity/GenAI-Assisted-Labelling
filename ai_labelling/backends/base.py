@@ -5,7 +5,12 @@ import json
 from dataclasses import dataclass
 from typing import Dict, Sequence
 
-from ai_labelling.models import LabelDefinition, ModelSpec, WorkItem
+from ai_labelling.models import (
+    IssueTypeDefinition,
+    LabelDefinition,
+    ModelSpec,
+    WorkItem,
+)
 
 
 @dataclass
@@ -14,12 +19,14 @@ class AIBackend:
 
     name: str
 
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     def suggest_labels(
         self,
         item: WorkItem,
         valid_labels: Sequence[LabelDefinition],
         model_spec: ModelSpec,
         allow_label_removals: bool,
+        valid_issue_types: Sequence[IssueTypeDefinition] = (),
     ) -> Dict[str, object]:
         """Ask the backend for label suggestions for a single work item."""
 
@@ -28,6 +35,7 @@ class AIBackend:
                 item,
                 valid_labels,
                 allow_label_removals=allow_label_removals,
+                valid_issue_types=valid_issue_types,
             ),
             model_spec,
             allow_label_removals=allow_label_removals,
@@ -44,6 +52,7 @@ class AIBackend:
         valid_labels: Sequence[LabelDefinition],
         *,
         allow_label_removals: bool,
+        valid_issue_types: Sequence[IssueTypeDefinition] = (),
     ) -> str:
         """Build the generic prompt for label-suggestion backends."""
 
@@ -56,6 +65,24 @@ class AIBackend:
             )
             confidence_action = "adding or removing"
 
+        issue_type_lines = ""
+        if item.kind == "issue" and valid_issue_types:
+            current = item.issue_type or "none"
+            types_json = json.dumps(
+                [
+                    {"name": t.name, "description": t.description}
+                    for t in valid_issue_types
+                ],
+                indent=2,
+            )
+            issue_type_lines = (
+                f"\nCurrent issue type: {current}"
+                f"\n\nValid issue types:\n{types_json}"
+                "\n\n- issue_type: name of the most fitting issue type from "
+                "the valid list, or null if the current type is already "
+                "correct or none fits\n"
+            )
+
         return f"""You are labeling a GitHub {item.kind}.
 
 Choose labels only from the provided valid label list.
@@ -64,7 +91,7 @@ Do not use comments, code, linked changes, or any outside context.
 
 Return JSON with:
 - add_labels: labels that should be present but are currently missing
-{removal_lines}- reason: short explanation
+{removal_lines}{issue_type_lines}- reason: short explanation
 
 If the title and body do not support {confidence_action} labels confidently,
 return empty lists.

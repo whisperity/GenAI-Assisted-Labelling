@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence
 
 from ai_labelling.config import REPO_DETECTION_ORDER
-from ai_labelling.models import LabelDefinition, SearchOptions, WorkItem
+from ai_labelling.models import (
+    IssueTypeDefinition,
+    LabelDefinition,
+    SearchOptions,
+    WorkItem,
+)
 from ai_labelling.shell import run
 from ai_labelling.terminal import colourise
 
@@ -254,6 +259,74 @@ class GitHubClient:
                 file=sys.stderr,
             )
 
+    def list_issue_types(self, repo: str) -> List[IssueTypeDefinition]:
+        """Fetch issue types for the repository's organisation."""
+
+        owner = repo.split("/")[0]
+        completed = run(
+            ("gh", "api", f"orgs/{owner}/issue-types"),
+            check=False,
+        )
+        if completed.returncode != 0:
+            return []
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        result: List[IssueTypeDefinition] = []
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            description = str(entry.get("description") or "")
+            type_id = int(entry.get("id") or 0)
+            result.append(
+                IssueTypeDefinition(
+                    name=name, description=description, type_id=type_id
+                )
+            )
+        return result
+
+    def set_issue_type(
+        self,
+        repo: str,
+        item: WorkItem,
+        issue_type: IssueTypeDefinition,
+    ) -> None:
+        """Set the issue type on a GitHub issue."""
+
+        if issue_type.type_id:
+            body = json.dumps({"type": {"id": issue_type.type_id}})
+        else:
+            body = json.dumps({"type": {"name": issue_type.name}})
+        completed = run(
+            (
+                "gh",
+                "api",
+                "--method",
+                "PATCH",
+                f"repos/{repo}/issues/{item.number}",
+                "--input",
+                "-",
+            ),
+            input_text=body,
+        )
+        if completed.stdout.strip():
+            print(colourise(completed.stdout.strip(), "green", bold=True))
+        if completed.stderr.strip():
+            print(
+                colourise(
+                    completed.stderr.strip(),
+                    "yellow",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+
     def post_comment(self, repo: str, item: WorkItem, body: str) -> None:
         """Post a comment on an issue or pull request through ``gh``."""
 
@@ -316,6 +389,13 @@ def work_item_from_search_result(
     if kind != expected_kind:
         raise RuntimeError(f"expected {expected_kind}, got {kind}")
 
+    type_obj = entry.get("type")
+    issue_type = (
+        str(type_obj["name"])
+        if isinstance(type_obj, dict) and "name" in type_obj
+        else None
+    )
+
     return WorkItem(
         number=int(entry["number"]),
         title=str(entry.get("title") or ""),
@@ -327,4 +407,5 @@ def work_item_from_search_result(
         created_at=str(entry.get("created_at", "")),
         author_login=str(entry.get("user", {}).get("login", "")),
         kind=kind,
+        issue_type=issue_type,
     )

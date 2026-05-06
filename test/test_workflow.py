@@ -9,6 +9,7 @@ from unittest import mock
 from test.helpers import make_item
 from ai_labelling.config import DEFAULT_DATE_CUTOFF
 from ai_labelling.models import (
+    IssueTypeDefinition,
     LabelDefinition,
     LabelSuggestion,
     SuggestionResult,
@@ -760,6 +761,200 @@ class WorkflowTests(
         self.assertIn("abc1234", body)
         self.assertIn("claude-haiku-4-5-20251001", body)
         self.assertIn("matches bug pattern", body)
+
+    def test_normalise_label_suggestions_extracts_valid_issue_type(self):
+        types = [IssueTypeDefinition("Bug", "A bug", 1)]
+        raw = {
+            "add_labels": [], "remove_labels": [],
+            "reason": "", "issue_type": "bug",
+        }
+        suggestion = normalise_label_suggestions(
+            raw, [], [],
+            valid_issue_types=types,
+            current_issue_type=None,
+        )
+        self.assertEqual(suggestion.issue_type, "Bug")
+
+    def test_normalise_label_suggestions_ignores_same_type(self):
+        types = [IssueTypeDefinition("Bug", "A bug", 1)]
+        raw = {
+            "add_labels": [], "remove_labels": [],
+            "reason": "", "issue_type": "Bug",
+        }
+        suggestion = normalise_label_suggestions(
+            raw, [], [],
+            valid_issue_types=types,
+            current_issue_type="Bug",
+        )
+        self.assertIsNone(suggestion.issue_type)
+
+    def test_normalise_label_suggestions_ignores_unknown_type(self):
+        types = [IssueTypeDefinition("Bug", "A bug", 1)]
+        raw = {
+            "add_labels": [], "remove_labels": [],
+            "reason": "", "issue_type": "Unknown",
+        }
+        suggestion = normalise_label_suggestions(
+            raw, [], [], valid_issue_types=types,
+        )
+        self.assertIsNone(suggestion.issue_type)
+
+    def test_normalise_label_suggestions_no_types_ignores_suggestion(self):
+        raw = {
+            "add_labels": [], "remove_labels": [],
+            "reason": "", "issue_type": "Bug",
+        }
+        suggestion = normalise_label_suggestions(
+            raw, [], [], valid_issue_types=(),
+        )
+        self.assertIsNone(suggestion.issue_type)
+
+    def test_review_prompts_issue_type_before_label_additions(self):
+        item = make_item(1, "One")
+        bug_type = IssueTypeDefinition("Bug", "A bug", 1)
+        suggestion_results = [
+            SuggestionResult(
+                item=item,
+                label_suggestion=LabelSuggestion(
+                    add_labels=["docs"],
+                    remove_labels=[],
+                    reason="",
+                    issue_type="Bug",
+                ),
+            )
+        ]
+        call_order = []
+
+        def fake_set_type(_repo, _item, _type, **_kwargs):
+            call_order.append("type")
+
+        def fake_add(_repo, _item, _labels, **_kwargs):
+            call_order.append("add")
+
+        with mock.patch.object(self.workflow, "print_summary"):
+            with mock.patch(
+                "ai_labelling.workflow.print_changes_summary"
+            ):
+                with mock.patch.object(
+                    self.workflow,
+                    "set_issue_type_with_retry",
+                    side_effect=fake_set_type,
+                ):
+                    with mock.patch.object(
+                        self.workflow,
+                        "add_labels_with_retry",
+                        side_effect=fake_add,
+                    ):
+                        self.workflow.review_and_apply_suggestions(
+                            "owner/repo",
+                            suggestion_results,
+                            True,
+                            False,
+                            valid_issue_types=[bug_type],
+                        )
+
+        self.assertEqual(call_order, ["type", "add"])
+
+    def test_review_skips_issue_type_for_prs(self):
+        pr = make_item(1, "One", kind="pr")
+        bug_type = IssueTypeDefinition("Bug", "A bug", 1)
+        suggestion_results = [
+            SuggestionResult(
+                item=pr,
+                label_suggestion=LabelSuggestion(
+                    add_labels=[],
+                    remove_labels=[],
+                    reason="",
+                    issue_type="Bug",
+                ),
+            )
+        ]
+
+        with mock.patch.object(self.workflow, "print_summary"):
+            with mock.patch(
+                "ai_labelling.workflow.print_changes_summary"
+            ):
+                with mock.patch.object(
+                    self.workflow,
+                    "set_issue_type_with_retry",
+                ) as type_mock:
+                    self.workflow.review_and_apply_suggestions(
+                        "owner/repo",
+                        suggestion_results,
+                        True,
+                        False,
+                        valid_issue_types=[bug_type],
+                    )
+
+        type_mock.assert_not_called()
+
+    def test_review_issue_type_prompt_accepted(self):
+        item = make_item(1, "One")
+        bug_type = IssueTypeDefinition("Bug", "A bug", 1)
+        suggestion_results = [
+            SuggestionResult(
+                item=item,
+                label_suggestion=LabelSuggestion(
+                    add_labels=[],
+                    remove_labels=[],
+                    reason="",
+                    issue_type="Bug",
+                ),
+            )
+        ]
+
+        with mock.patch.object(self.workflow, "print_summary"):
+            with mock.patch(
+                "ai_labelling.workflow.print_changes_summary"
+            ):
+                with mock.patch.object(
+                    self.workflow,
+                    "set_issue_type_with_retry",
+                ) as type_mock:
+                    self.workflow.review_and_apply_suggestions(
+                        "owner/repo",
+                        suggestion_results,
+                        False,
+                        False,
+                        input_fn=lambda _: "y",
+                        valid_issue_types=[bug_type],
+                    )
+
+        type_mock.assert_called_once()
+
+    def test_review_issue_type_prompt_declined(self):
+        item = make_item(1, "One")
+        bug_type = IssueTypeDefinition("Bug", "A bug", 1)
+        suggestion_results = [
+            SuggestionResult(
+                item=item,
+                label_suggestion=LabelSuggestion(
+                    add_labels=[],
+                    remove_labels=[],
+                    reason="",
+                    issue_type="Bug",
+                ),
+            )
+        ]
+
+        with mock.patch.object(self.workflow, "print_summary"):
+            with mock.patch(
+                "ai_labelling.workflow.print_changes_summary"
+            ):
+                with mock.patch.object(
+                    self.workflow,
+                    "set_issue_type_with_retry",
+                ) as type_mock:
+                    self.workflow.review_and_apply_suggestions(
+                        "owner/repo",
+                        suggestion_results,
+                        False,
+                        False,
+                        input_fn=lambda _: "n",
+                        valid_issue_types=[bug_type],
+                    )
+
+        type_mock.assert_not_called()
 
     def test_comment_reason_not_posted_when_dry_run(self):
         item = make_item(1, "One")

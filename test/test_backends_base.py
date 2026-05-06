@@ -6,7 +6,7 @@ import unittest
 from test.helpers import make_item
 
 from ai_labelling.backends.base import AIBackend
-from ai_labelling.models import LabelDefinition, ModelSpec
+from ai_labelling.models import IssueTypeDefinition, LabelDefinition, ModelSpec
 
 
 class BackendBaseTests(unittest.TestCase):
@@ -92,3 +92,51 @@ class BackendBaseTests(unittest.TestCase):
         self.assertEqual(backend.model.model, "gpt-5.4-mini")
         self.assertFalse(backend.allow_label_removals)
         self.assertIn("Body text", backend.prompt)
+
+    def test_build_prompt_includes_issue_types_for_issues(self):
+        """Issue type section appears in the prompt when types are provided."""
+
+        backend = AIBackend(name="Test")
+        item = make_item(1, "Crash on startup")
+        prompt = backend.build_prompt(
+            item,
+            [LabelDefinition("bug", "Bug report")],
+            allow_label_removals=False,
+            valid_issue_types=[
+                IssueTypeDefinition("Bug", "An unexpected problem", 1),
+                IssueTypeDefinition("Feature", "A new capability", 2),
+            ],
+        )
+
+        self.assertIn("issue_type", prompt)
+        self.assertIn("An unexpected problem", prompt)
+        self.assertIn("A new capability", prompt)
+
+    def test_build_prompt_omits_issue_types_for_prs(self):
+        """Issue type section must not appear in PR prompts."""
+
+        backend = AIBackend(name="Test")
+        pr = make_item(1, "Fix crash", kind="pr")
+        prompt = backend.build_prompt(
+            pr,
+            [LabelDefinition("bug", "Bug report")],
+            allow_label_removals=False,
+            valid_issue_types=[
+                IssueTypeDefinition("Bug", "An unexpected problem", 1),
+            ],
+        )
+
+        self.assertNotIn("issue_type", prompt)
+
+    def test_build_prompt_omits_issue_types_when_empty(self):
+        """No issue type section when the valid list is empty."""
+
+        backend = AIBackend(name="Test")
+        prompt = backend.build_prompt(
+            make_item(1, "Issue"),
+            [LabelDefinition("bug", "Bug")],
+            allow_label_removals=False,
+            valid_issue_types=(),
+        )
+
+        self.assertNotIn("issue_type", prompt)

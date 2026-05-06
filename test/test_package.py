@@ -45,12 +45,15 @@ class PackageFacadeTests(unittest.TestCase):
                 return_value=[LabelDefinition("bug", "")],
             ):
                 with mock.patch.object(
-                    ai_labelling,
-                    "collect_items",
-                    return_value=[],
+                    ai_labelling, "list_issue_types", return_value=[]
                 ):
-                    with mock.patch("builtins.print"):
-                        result = ai_labelling.main()
+                    with mock.patch.object(
+                        ai_labelling,
+                        "collect_items",
+                        return_value=[],
+                    ):
+                        with mock.patch("builtins.print"):
+                            result = ai_labelling.main()
 
         self.assertEqual(result, 0)
 
@@ -90,34 +93,37 @@ class PackageFacadeTests(unittest.TestCase):
                 return_value=labels,
             ):
                 with mock.patch.object(
-                    ai_labelling,
-                    "collect_items",
-                    return_value=[item],
+                    ai_labelling, "list_issue_types", return_value=[]
                 ):
                     with mock.patch.object(
                         ai_labelling,
-                        "print_match_summary",
-                    ) as summary_mock:
+                        "collect_items",
+                        return_value=[item],
+                    ):
                         with mock.patch.object(
                             ai_labelling,
-                            "print_matching_items",
-                        ) as matching_mock:
+                            "print_match_summary",
+                        ) as summary_mock:
                             with mock.patch.object(
                                 ai_labelling,
-                                "select_items_to_handle",
-                                return_value=[item],
-                            ) as select_mock:
+                                "print_matching_items",
+                            ) as matching_mock:
                                 with mock.patch.object(
                                     ai_labelling,
-                                    "run_ai_batch",
-                                    return_value=suggestion_results,
-                                ) as batch_mock:
+                                    "select_items_to_handle",
+                                    return_value=[item],
+                                ) as select_mock:
                                     with mock.patch.object(
                                         ai_labelling,
-                                        "review_and_apply_suggestions",
-                                    ) as review_mock:
-                                        with mock.patch("builtins.print"):
-                                            result = ai_labelling.main()
+                                        "run_ai_batch",
+                                        return_value=suggestion_results,
+                                    ) as batch_mock:
+                                        with mock.patch.object(
+                                            ai_labelling,
+                                            "review_and_apply_suggestions",
+                                        ) as review_mock:
+                                            with mock.patch("builtins.print"):
+                                                result = ai_labelling.main()
 
         self.assertEqual(result, 0)
         summary_mock.assert_called_once_with([item])
@@ -129,6 +135,7 @@ class PackageFacadeTests(unittest.TestCase):
             "codex:*:low",
             False,
             input_fn=input,
+            valid_issue_types=[],
         )
         review_mock.assert_called_once_with(
             "llvm/llvm-project",
@@ -137,6 +144,7 @@ class PackageFacadeTests(unittest.TestCase):
             False,
             dry_run=False,
             comment_reason=False,
+            valid_issue_types=[],
         )
 
     def test_main_returns_zero_when_no_items_are_selected(self):
@@ -163,25 +171,28 @@ class PackageFacadeTests(unittest.TestCase):
                 return_value=[LabelDefinition("bug", "")],
             ):
                 with mock.patch.object(
-                    ai_labelling,
-                    "collect_items",
-                    return_value=[item],
+                    ai_labelling, "list_issue_types", return_value=[]
                 ):
                     with mock.patch.object(
                         ai_labelling,
-                        "print_match_summary",
+                        "collect_items",
+                        return_value=[item],
                     ):
                         with mock.patch.object(
                             ai_labelling,
-                            "print_matching_items",
+                            "print_match_summary",
                         ):
                             with mock.patch.object(
                                 ai_labelling,
-                                "select_items_to_handle",
-                                return_value=[],
+                                "print_matching_items",
                             ):
-                                with mock.patch("builtins.print"):
-                                    result = ai_labelling.main()
+                                with mock.patch.object(
+                                    ai_labelling,
+                                    "select_items_to_handle",
+                                    return_value=[],
+                                ):
+                                    with mock.patch("builtins.print"):
+                                        result = ai_labelling.main()
 
         self.assertEqual(result, 0)
 

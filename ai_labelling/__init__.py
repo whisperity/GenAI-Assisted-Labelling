@@ -1,4 +1,5 @@
 """Public package facade for the AI-assisted labelling workflow."""
+# pylint: disable=duplicate-code
 
 from typing import Callable, Optional, Sequence
 
@@ -64,6 +65,7 @@ from ai_labelling.github_client import (
     work_item_from_search_result,
 )
 from ai_labelling.models import (
+    IssueTypeDefinition,
     LabelDefinition,
     LabelSuggestion,
     ModelSpec,
@@ -117,6 +119,12 @@ def gh_json(argv: Sequence[str]) -> object:
     """Run ``gh`` and decode its stdout as JSON."""
 
     return _GITHUB_CLIENT.json(argv)
+
+
+def list_issue_types(repo: str) -> list[IssueTypeDefinition]:
+    """Fetch issue types for the repository's organisation."""
+
+    return _GITHUB_CLIENT.list_issue_types(repo)
 
 
 def list_repo_labels(repo: str) -> list[LabelDefinition]:
@@ -268,12 +276,14 @@ def select_items_to_handle(
     )
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def run_ai_batch(
     items: Sequence[WorkItem],
     valid_labels: Sequence[LabelDefinition],
     model: str,
     allow_label_removals: bool,
     input_fn: Callable[[str], str] = input,
+    valid_issue_types: Sequence[IssueTypeDefinition] = (),
 ) -> list[SuggestionResult]:
     """Run AI suggestions for selected items in parallel."""
 
@@ -284,6 +294,7 @@ def run_ai_batch(
         model,
         allow_label_removals,
         input_fn=input_fn,
+        valid_issue_types=valid_issue_types,
     )
 
 
@@ -306,6 +317,7 @@ def review_and_apply_suggestions(
     *,
     dry_run: bool = False,
     comment_reason: bool = False,
+    valid_issue_types: Sequence[IssueTypeDefinition] = (),
 ) -> None:
     """Review AI suggestions and optionally apply label changes."""
 
@@ -318,6 +330,7 @@ def review_and_apply_suggestions(
         input_fn=input_fn,
         dry_run=dry_run,
         comment_reason=comment_reason,
+        valid_issue_types=valid_issue_types,
     )
 
 
@@ -336,6 +349,8 @@ def main() -> int:
     valid_labels = list_repo_labels(repo)
     if not valid_labels:
         raise RuntimeError(f"repository {repo} has no labels")
+
+    valid_issue_types = list_issue_types(repo)
 
     items = collect_items(repo, args)
     if not items:
@@ -375,6 +390,7 @@ def main() -> int:
         args.model,
         args.allow_label_removals,
         input_fn=input,
+        valid_issue_types=valid_issue_types,
     )
     review_and_apply_suggestions(
         repo,
@@ -383,6 +399,7 @@ def main() -> int:
         args.allow_label_removals,
         dry_run=args.dry_run,
         comment_reason=args.comment_reason,
+        valid_issue_types=valid_issue_types,
     )
     return 0
 

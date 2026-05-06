@@ -5,7 +5,7 @@ import sys
 import textwrap
 import traceback
 from datetime import datetime
-from typing import Callable, List, Sequence
+from typing import Callable, List, Optional, Sequence
 
 from ai_labelling.models import (
     LabelSuggestion,
@@ -547,9 +547,10 @@ def print_changes_summary(
     for result in suggestion_results:
         item = result.item
         suggestion = result.label_suggestion
+        has_type = item.kind == "issue" and suggestion.issue_type is not None
         has_adds = bool(suggestion.add_labels)
         has_removes = allow_label_removals and bool(suggestion.remove_labels)
-        if not has_adds and not has_removes:
+        if not has_type and not has_adds and not has_removes:
             continue
         state_colour = "green" if item.state.casefold() == "open" else "red"
         kind_display = "issue" if item.kind == "issue" else "PR"
@@ -563,6 +564,10 @@ def print_changes_summary(
                 f"[{item.state} {kind_display}]", state_colour, bold=True
             )
         )
+        if has_type:
+            print(
+                "  " + colourise(f"type: {suggestion.issue_type}", "cyan")
+            )
         for lbl in suggestion.add_labels:
             print("  " + colourise(f"+ {lbl}", "green"))
         if allow_label_removals:
@@ -574,7 +579,8 @@ def print_changes_summary(
 _REPO_URL = "http://github.com/whisperity/GenAI-Assisted-Labelling"
 
 
-# pylint: disable=too-many-arguments,too-many-positional-arguments
+# pylint: disable=too-many-arguments,too-many-branches
+# pylint: disable=too-many-positional-arguments
 def format_comment_body(
     original_suggestion: LabelSuggestion,
     applied_add: Sequence[str],
@@ -582,6 +588,8 @@ def format_comment_body(
     model: str,
     version: str,
     allow_label_removals: bool,
+    *,
+    applied_issue_type: Optional[str] = None,
 ) -> str:
     """Build the Markdown comment body for a labelling action."""
 
@@ -600,6 +608,24 @@ def format_comment_body(
         lines += ["**Reasoning:**", ""]
         for line in original_suggestion.reason.strip().splitlines():
             lines.append(f"> {line}")
+        lines.append("")
+
+    if original_suggestion.issue_type is not None:
+        accepted = (
+            applied_issue_type is not None
+            and applied_issue_type.casefold()
+            == original_suggestion.issue_type.casefold()
+        )
+        if accepted:
+            lines.append(
+                f"**Suggested issue type:** `{original_suggestion.issue_type}`"
+            )
+        else:
+            lines.append(
+                f"**Suggested issue type:** "
+                f"~~`{original_suggestion.issue_type}`~~"
+                " (rejected by operator)"
+            )
         lines.append("")
 
     if original_suggestion.add_labels:

@@ -25,6 +25,7 @@ from ai_labelling.formatting import (
 from ai_labelling.shell import run as _shell_run
 from ai_labelling.github_client import GitHubClient, parse_github_timestamp
 from ai_labelling.models import (
+    IssueTypeDefinition,
     LabelDefinition,
     LabelSuggestion,
     SearchOptions,
@@ -123,10 +124,14 @@ def _get_script_version() -> str:
     return "unknown"
 
 
+# pylint: disable=too-many-locals
 def normalise_label_suggestions(
     suggestion: Dict[str, object],
     valid_labels: Sequence[LabelDefinition],
     existing_labels: Sequence[str],
+    *,
+    valid_issue_types: Sequence[IssueTypeDefinition] = (),
+    current_issue_type: Optional[str] = None,
 ) -> LabelSuggestion:
     """Filter model output down to valid label additions and removals."""
 
@@ -148,7 +153,22 @@ def normalise_label_suggestions(
     labels_to_remove = [
         label for label in labels_to_remove if label.casefold() in existing
     ]
-    return LabelSuggestion(labels_to_add, labels_to_remove, reason)
+
+    issue_type: Optional[str] = None
+    if valid_issue_types:
+        raw_type = suggestion.get("issue_type")
+        if isinstance(raw_type, str) and raw_type.strip():
+            valid_type_map = {
+                t.name.casefold(): t.name for t in valid_issue_types
+            }
+            canonical = valid_type_map.get(raw_type.strip().casefold())
+            current_cf = (current_issue_type or "").casefold()
+            if canonical and canonical.casefold() != current_cf:
+                issue_type = canonical
+
+    return LabelSuggestion(
+        labels_to_add, labels_to_remove, reason, issue_type=issue_type
+    )
 
 
 class LabellingWorkflow:
@@ -157,12 +177,14 @@ class LabellingWorkflow:
     def __init__(self, github_client: Optional[GitHubClient] = None):
         self.github_client = github_client or GitHubClient()
 
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     def build_suggestion_result(
         self,
         item: WorkItem,
         valid_labels: Sequence[LabelDefinition],
         model: str,
         allow_label_removals: bool,
+        valid_issue_types: Sequence[IssueTypeDefinition] = (),
     ) -> SuggestionResult:
         """Run the AI backend for one work item and normalise the result."""
 
@@ -173,6 +195,7 @@ class LabellingWorkflow:
             valid_labels,
             model_spec,
             allow_label_removals,
+            valid_issue_types=valid_issue_types,
         )
         model_display = (
             f"{model_spec.provider}:{model_spec.model}"
@@ -185,6 +208,8 @@ class LabellingWorkflow:
                 suggestion,
                 valid_labels,
                 item.labels,
+                valid_issue_types=valid_issue_types,
+                current_issue_type=item.issue_type,
             ),
             model=model_display,
         )
@@ -197,6 +222,7 @@ class LabellingWorkflow:
         model: str,
         allow_label_removals: bool,
         input_fn: Callable[[str], str] = input,
+        valid_issue_types: Sequence[IssueTypeDefinition] = (),
     ) -> Optional[SuggestionResult]:
         """Run one AI suggestion, optionally retrying after failures."""
 
@@ -207,6 +233,7 @@ class LabellingWorkflow:
                     valid_labels,
                     model,
                     allow_label_removals,
+                    valid_issue_types=valid_issue_types,
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 print_exception_diagnostics(
@@ -278,6 +305,38 @@ class LabellingWorkflow:
                     (
                         f"Retry removing label {label!r} from "
                         f"{item.kind.upper()} #{item.number}? "
+                    ),
+                    default_yes=True,
+                    input_fn=input_fn,
+                )
+                if not should_retry:
+                    return
+
+    def set_issue_type_with_retry(
+        self,
+        repo: str,
+        item: WorkItem,
+        issue_type: IssueTypeDefinition,
+        input_fn: Callable[[str], str] = input,
+    ) -> None:
+        """Set the issue type, offering retries when the write step fails."""
+
+        while True:
+            try:
+                self.github_client.set_issue_type(repo, item, issue_type)
+                return
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                print_exception_diagnostics(
+                    exc,
+                    (
+                        f"Setting issue type {issue_type.name!r} on "
+                        f"#{item.number}"
+                    ),
+                )
+                should_retry = prompt_yes_no(
+                    (
+                        f"Retry setting issue type {issue_type.name!r} "
+                        f"on #{item.number}? "
                     ),
                     default_yes=True,
                     input_fn=input_fn,
@@ -376,6 +435,7 @@ class LabellingWorkflow:
         model: str,
         allow_label_removals: bool,
         input_fn: Callable[[str], str] = input,
+        valid_issue_types: Sequence[IssueTypeDefinition] = (),
     ) -> List[SuggestionResult]:
         """Run AI suggestions for selected items in parallel."""
 
@@ -404,6 +464,7 @@ class LabellingWorkflow:
                         model,
                         allow_label_removals,
                         input_fn=input_fn,
+                        valid_issue_types=valid_issue_types,
                     )
                 ]
                 if result is not None
@@ -420,6 +481,7 @@ class LabellingWorkflow:
                     list(valid_labels),
                     model,
                     allow_label_removals,
+                    list(valid_issue_types),
                 ): index
                 for index, item in enumerate(items)
             }
@@ -454,6 +516,7 @@ class LabellingWorkflow:
                                 model,
                                 allow_label_removals,
                                 input_fn=input_fn,
+                                valid_issue_types=valid_issue_types,
                             )
                         )
         return [result for result in results if result is not None]
@@ -466,6 +529,16 @@ class LabellingWorkflow:
         """Print the suggested label changes for one work item."""
 
         print_item_details(item)
+        if item.issue_type:
+            print(
+                colourise("Issue type:", "blue", bold=True)
+                + f" {item.issue_type}"
+            )
+        if label_suggestion.issue_type is not None:
+            print(
+                colourise("Suggested issue type:", "green", bold=True)
+                + f" {label_suggestion.issue_type}"
+            )
         print(colourise("Existing labels:", "blue", bold=True))
         print(format_label_block(item.labels))
         if label_suggestion.add_labels:
@@ -479,7 +552,7 @@ class LabellingWorkflow:
             print(format_reason(label_suggestion.reason))
         print()
 
-    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-arguments,too-many-statements
     # pylint: disable=too-many-locals,too-many-positional-arguments
     def review_and_apply_suggestions(
         self,
@@ -491,8 +564,11 @@ class LabellingWorkflow:
         *,
         dry_run: bool = False,
         comment_reason: bool = False,
+        valid_issue_types: Sequence[IssueTypeDefinition] = (),
     ) -> None:
         """Review AI suggestions and optionally apply label changes."""
+
+        issue_type_map = {t.name.casefold(): t for t in valid_issue_types}
 
         def apply_label_change_bucket(
             item: WorkItem,
@@ -567,6 +643,39 @@ class LabellingWorkflow:
             if dry_run:
                 summary_results.append(result)
             else:
+                applied_issue_type: Optional[str] = None
+                suggested_type = result.label_suggestion.issue_type
+                if (
+                    result.item.kind == "issue"
+                    and suggested_type is not None
+                ):
+                    type_def = issue_type_map.get(
+                        suggested_type.casefold()
+                    )
+                    if type_def is not None:
+                        should_set = force
+                        if not should_set:
+                            answer = prompt_confirmation(
+                                (
+                                    f'SET issue type to '
+                                    f'"{suggested_type}" '
+                                    f'for issue '
+                                    f'#{result.item.number}? '
+                                    "[y/n/q/?] "
+                                ),
+                                allow_apply_all=False,
+                                input_fn=input_fn,
+                            )
+                            should_set = answer == "Y"
+                        if should_set:
+                            self.set_issue_type_with_retry(
+                                repo,
+                                result.item,
+                                type_def,
+                                input_fn=input_fn,
+                            )
+                            applied_issue_type = suggested_type
+
                 applied_add = apply_label_change_bucket(
                     result.item,
                     result.label_suggestion.add_labels,
@@ -579,7 +688,7 @@ class LabellingWorkflow:
                         result.label_suggestion.remove_labels,
                         removal=True,
                     )
-                if applied_add or applied_remove:
+                if applied_add or applied_remove or applied_issue_type:
                     summary_results.append(
                         SuggestionResult(
                             item=result.item,
@@ -587,6 +696,7 @@ class LabellingWorkflow:
                                 applied_add,
                                 applied_remove,
                                 result.label_suggestion.reason,
+                                issue_type=applied_issue_type,
                             ),
                             model=result.model,
                         )
@@ -599,6 +709,7 @@ class LabellingWorkflow:
                         result.model,
                         version,
                         allow_label_removals,
+                        applied_issue_type=applied_issue_type,
                     )
                     if get_debug_level() >= 2:
                         print(
