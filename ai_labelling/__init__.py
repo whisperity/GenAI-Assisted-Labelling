@@ -42,6 +42,7 @@ from ai_labelling.formatting import (
     describe_match_bucket,
     format_body_preview,
     format_body_preview_colourised,
+    format_comment_body,
     format_display_timestamp,
     format_label_block,
     format_reason,
@@ -295,7 +296,8 @@ def print_summary(
     LabellingWorkflow.print_summary(item, label_suggestion)
 
 
-def review_and_apply_suggestions(  # pylint: disable=too-many-arguments
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+def review_and_apply_suggestions(
     repo: str,
     suggestion_results: Sequence[SuggestionResult],
     force: bool,
@@ -303,6 +305,7 @@ def review_and_apply_suggestions(  # pylint: disable=too-many-arguments
     input_fn: Callable[[str], str] = input,
     *,
     dry_run: bool = False,
+    comment_reason: bool = False,
 ) -> None:
     """Review AI suggestions and optionally apply label changes."""
 
@@ -314,6 +317,7 @@ def review_and_apply_suggestions(  # pylint: disable=too-many-arguments
         allow_label_removals,
         input_fn=input_fn,
         dry_run=dry_run,
+        comment_reason=comment_reason,
     )
 
 
@@ -378,6 +382,7 @@ def main() -> int:
         args.force,
         args.allow_label_removals,
         dry_run=args.dry_run,
+        comment_reason=args.comment_reason,
     )
     return 0
 

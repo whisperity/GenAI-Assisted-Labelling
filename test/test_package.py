@@ -62,6 +62,7 @@ class PackageFacadeTests(unittest.TestCase):
             date=DEFAULT_DATE_CUTOFF,
             limit=None,
             allow_label_removals=False,
+            comment_reason=False,
             include_closed=False,
             include_issues=True,
             include_open=True,
@@ -135,6 +136,7 @@ class PackageFacadeTests(unittest.TestCase):
             False,
             False,
             dry_run=False,
+            comment_reason=False,
         )
 
     def test_main_returns_zero_when_no_items_are_selected(self):

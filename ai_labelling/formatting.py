@@ -7,7 +7,12 @@ import traceback
 from datetime import datetime
 from typing import Callable, List, Sequence
 
-from ai_labelling.models import PreviewBlock, SuggestionResult, WorkItem
+from ai_labelling.models import (
+    LabelSuggestion,
+    PreviewBlock,
+    SuggestionResult,
+    WorkItem,
+)
 from ai_labelling.terminal import colourise
 
 # Inline Markdown span patterns, matched in priority order so that ***
@@ -364,7 +369,9 @@ def format_label_block(labels: Sequence[str]) -> str:
 
     if not labels:
         return "  - (none)"
-    return "\n".join(f"  - {label}" for label in labels)
+    return "\n".join(
+        f"  - {label}" for label in sorted(labels, key=str.casefold)
+    )
 
 
 def format_reason(reason: str) -> str:
@@ -562,3 +569,61 @@ def print_changes_summary(
             for lbl in suggestion.remove_labels:
                 print("  " + colourise(f"- {lbl}", "magenta"))
     print()
+
+
+_REPO_URL = "http://github.com/whisperity/GenAI-Assisted-Labelling"
+
+
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+def format_comment_body(
+    original_suggestion: LabelSuggestion,
+    applied_add: Sequence[str],
+    applied_remove: Sequence[str],
+    model: str,
+    version: str,
+    allow_label_removals: bool,
+) -> str:
+    """Build the Markdown comment body for a labelling action."""
+
+    applied_add_cf = {lbl.casefold() for lbl in applied_add}
+    applied_remove_cf = {lbl.casefold() for lbl in applied_remove}
+
+    lines: List[str] = [
+        f"## [**AI-assisted labelling**]({_REPO_URL})",
+        "",
+        (f"script version [`{version}`]({_REPO_URL}/tree/{version}), "
+         f"using model: `{model}`"),
+        "",
+    ]
+
+    if original_suggestion.reason.strip():
+        lines += ["**Reasoning:**", ""]
+        for line in original_suggestion.reason.strip().splitlines():
+            lines.append(f"> {line}")
+        lines.append("")
+
+    if original_suggestion.add_labels:
+        lines.append("**Suggested additions:**")
+        for lbl in sorted(original_suggestion.add_labels, key=str.casefold):
+            if lbl.casefold() in applied_add_cf:
+                lines.append(f"  - `{lbl}`")
+            else:
+                lines.append(f"  - ~~`{lbl}`~~ (rejected by operator)")
+        lines.append("")
+
+    if allow_label_removals and original_suggestion.remove_labels:
+        lines.append("**Suggested removals:**")
+        for lbl in sorted(
+            original_suggestion.remove_labels, key=str.casefold
+        ):
+            if lbl.casefold() in applied_remove_cf:
+                lines.append(f"  - `{lbl}`")
+            else:
+                lines.append(f"  - ~~`{lbl}`~~ (rejected by operator)")
+        lines.append("")
+
+    while lines and lines[-1] == "":
+        lines.pop()
+    lines.append("")
+
+    return "\n".join(lines)

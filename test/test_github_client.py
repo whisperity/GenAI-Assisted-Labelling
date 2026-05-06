@@ -1,6 +1,7 @@
 """Tests for GitHub CLI client helpers."""
 # pylint: disable=missing-function-docstring
 
+import sys
 import unittest
 from datetime import datetime, timezone
 from unittest import mock
@@ -280,6 +281,47 @@ class GitHubClientTests(  # pylint: disable=too-many-public-methods
                 "repos/llvm/llvm-project/issues/7/labels/bug",
             )
         )
+
+    def test_post_comment_sends_json_body_via_stdin(self):
+        item = make_item(7, "Seven")
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch(
+            "ai_labelling.github_client.run",
+            return_value=completed,
+        ) as run_mock:
+            self.client.post_comment("llvm/llvm-project", item, "hello")
+
+        run_mock.assert_called_once_with(
+            (
+                "gh",
+                "api",
+                "--method",
+                "POST",
+                "repos/llvm/llvm-project/issues/7/comments",
+                "--input",
+                "-",
+            ),
+            input_text='{"body": "hello"}',
+            check=False,
+        )
+
+    def test_post_comment_warns_on_failure(self):
+        item = make_item(7, "Seven")
+        completed = mock.Mock(returncode=1, stdout="", stderr="api error")
+
+        with mock.patch(
+            "ai_labelling.github_client.run",
+            return_value=completed,
+        ):
+            with mock.patch("builtins.print") as print_mock:
+                self.client.post_comment("llvm/llvm-project", item, "hello")
+
+        stderr_calls = [
+            c for c in print_mock.call_args_list
+            if c.kwargs.get("file") is sys.stderr
+        ]
+        self.assertGreater(len(stderr_calls), 0)
 
     def test_parse_github_timestamp_returns_aware_datetime(self):
         parsed = parse_github_timestamp("2026-05-01T00:00:00Z")

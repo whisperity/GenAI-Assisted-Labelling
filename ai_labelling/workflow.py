@@ -3,6 +3,7 @@
 import argparse
 import concurrent.futures
 import os
+import sys
 import time as time_module
 from typing import Callable, Dict, List, Optional, Sequence
 
@@ -13,6 +14,7 @@ from ai_labelling.config import (
     FORCE_WARNING_DELAY_SECONDS,
 )
 from ai_labelling.formatting import (
+    format_comment_body,
     format_label_block,
     format_reason,
     print_changes_summary,
@@ -20,6 +22,7 @@ from ai_labelling.formatting import (
     print_item_details,
     print_prompt_help,
 )
+from ai_labelling.shell import run as _shell_run
 from ai_labelling.github_client import GitHubClient, parse_github_timestamp
 from ai_labelling.models import (
     LabelDefinition,
@@ -29,7 +32,7 @@ from ai_labelling.models import (
     UserQuit,
     WorkItem,
 )
-from ai_labelling.terminal import colourise
+from ai_labelling.terminal import colourise, get_debug_level
 
 
 def prompt_confirmation(
@@ -95,7 +98,29 @@ def normalise_label_list(
             continue
         seen.add(canonical.casefold())
         labels.append(canonical)
-    return labels
+    return sorted(labels, key=str.casefold)
+
+
+def _get_script_version() -> str:
+    """Return a short git SHA for the script repository, or 'unknown'."""
+
+    try:
+        result = _shell_run(
+            (
+                "git",
+                "-C",
+                os.path.dirname(__file__),
+                "rev-parse",
+                "--short",
+                "HEAD",
+            ),
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return "unknown"
 
 
 def normalise_label_suggestions(
@@ -149,6 +174,11 @@ class LabellingWorkflow:
             model_spec,
             allow_label_removals,
         )
+        model_display = (
+            f"{model_spec.provider}:{model_spec.model}"
+            if model_spec.model
+            else model_spec.provider
+        )
         return SuggestionResult(
             item=item,
             label_suggestion=normalise_label_suggestions(
@@ -156,6 +186,7 @@ class LabellingWorkflow:
                 valid_labels,
                 item.labels,
             ),
+            model=model_display,
         )
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -448,6 +479,8 @@ class LabellingWorkflow:
             print(format_reason(label_suggestion.reason))
         print()
 
+    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-locals,too-many-positional-arguments
     def review_and_apply_suggestions(
         self,
         repo: str,
@@ -457,6 +490,7 @@ class LabellingWorkflow:
         input_fn: Callable[[str], str] = input,
         *,
         dry_run: bool = False,
+        comment_reason: bool = False,
     ) -> None:
         """Review AI suggestions and optionally apply label changes."""
 
@@ -474,7 +508,7 @@ class LabellingWorkflow:
             skip_remaining = False
             kind_display = "issue" if item.kind == "issue" else "PR"
             prompt_template = (
-                'REMOVE the label "{label}" from {kind} #{number}? '
+                '**REMOVE** the label "{label}" from {kind} #{number}? '
                 "[y/n/a/d/q/?] "
                 if removal
                 else 'ADD the label "{label}" to {kind} #{number}? '
@@ -526,6 +560,7 @@ class LabellingWorkflow:
 
             return applied
 
+        version = _get_script_version() if comment_reason else ""
         summary_results: List[SuggestionResult] = []
         for result in suggestion_results:
             self.print_summary(result.item, result.label_suggestion)
@@ -553,8 +588,37 @@ class LabellingWorkflow:
                                 applied_remove,
                                 result.label_suggestion.reason,
                             ),
+                            model=result.model,
                         )
                     )
+                if comment_reason:
+                    body = format_comment_body(
+                        result.label_suggestion,
+                        applied_add,
+                        applied_remove,
+                        result.model,
+                        version,
+                        allow_label_removals,
+                    )
+                    if get_debug_level() >= 2:
+                        print(
+                            f"# Comment for "
+                            f"{result.item.kind.upper()} "
+                            f"#{result.item.number}:\n{body}",
+                            file=sys.stderr,
+                        )
+                    try:
+                        self.github_client.post_comment(
+                            repo, result.item, body
+                        )
+                    # pylint: disable=broad-exception-caught
+                    except Exception as exc:
+                        print_exception_diagnostics(
+                            exc,
+                            f"Posting comment on "
+                            f"{result.item.kind.upper()} "
+                            f"#{result.item.number}",
+                        )
 
         print_changes_summary(
             summary_results, allow_label_removals, dry_run=dry_run

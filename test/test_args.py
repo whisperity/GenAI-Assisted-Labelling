@@ -79,6 +79,18 @@ class DryRunFlagTests(unittest.TestCase):
         self.assertTrue(args.force)
 
 
+class CommentReasonFlagTests(unittest.TestCase):
+    """Check the --comment-reason argument."""
+
+    def test_comment_reason_defaults_to_false(self):
+        args = build_argument_parser().parse_args([])
+        self.assertFalse(args.comment_reason)
+
+    def test_comment_reason_flag_sets_true(self):
+        args = build_argument_parser().parse_args(["--comment-reason"])
+        self.assertTrue(args.comment_reason)
+
+
 class PositiveIntAndRepoArgTests(unittest.TestCase):
     """Check helper argument-type validators."""
 

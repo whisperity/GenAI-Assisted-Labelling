@@ -254,6 +254,42 @@ class GitHubClient:
                 file=sys.stderr,
             )
 
+    def post_comment(self, repo: str, item: WorkItem, body: str) -> None:
+        """Post a comment on an issue or pull request through ``gh``."""
+
+        completed = run(
+            (
+                "gh",
+                "api",
+                "--method",
+                "POST",
+                f"repos/{repo}/issues/{item.number}/comments",
+                "--input",
+                "-",
+            ),
+            input_text=json.dumps({"body": body}),
+            check=False,
+        )
+        if completed.returncode != 0:
+            print(
+                colourise(
+                    f"Warning: failed to post comment on "
+                    f"{item.kind.upper()} #{item.number}",
+                    "yellow",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            if completed.stderr.strip():
+                print(
+                    colourise(
+                        completed.stderr.strip(),
+                        "yellow",
+                        stream=sys.stderr,
+                    ),
+                    file=sys.stderr,
+                )
+
 
 def parse_github_timestamp(timestamp: str) -> datetime:
     """Parse a GitHub API timestamp into a timezone-aware ``datetime``."""

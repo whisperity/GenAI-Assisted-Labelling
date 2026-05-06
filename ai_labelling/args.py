@@ -220,6 +220,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "suggested."
         ),
     )
+    action_group.add_argument(
+        "--comment-reason",
+        dest="comment_reason",
+        action="store_true",
+        help=(
+            "After labelling each item, post a GitHub comment with the AI "
+            "model used, its reasoning, and which label changes were accepted "
+            "or rejected. Has no effect with '--dry-run'."
+        ),
+    )
 
     github_group.add_argument(
         "--repository",

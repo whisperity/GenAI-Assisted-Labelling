@@ -716,3 +716,79 @@ class WorkflowTests(
         )
         self.assertIn("Suggested additions:", printed)
         self.assertIn("Suggested removals:", printed)
+
+    def test_comment_reason_posts_comment_after_applying_labels(self):
+        item = make_item(1, "One")
+        suggestion_results = [
+            SuggestionResult(
+                item=item,
+                label_suggestion=LabelSuggestion(
+                    add_labels=["bug"],
+                    remove_labels=[],
+                    reason="matches bug pattern",
+                ),
+                model="anthropic:claude-haiku-4-5-20251001",
+            )
+        ]
+
+        with mock.patch.object(self.workflow, "print_summary"):
+            with mock.patch(
+                "ai_labelling.workflow.print_changes_summary"
+            ):
+                with mock.patch(
+                    "ai_labelling.workflow._get_script_version",
+                    return_value="abc1234",
+                ):
+                    with mock.patch.object(
+                        self.workflow,
+                        "add_labels_with_retry",
+                    ):
+                        with mock.patch.object(
+                            self.workflow.github_client,
+                            "post_comment",
+                        ) as comment_mock:
+                            self.workflow.review_and_apply_suggestions(
+                                "owner/repo",
+                                suggestion_results,
+                                True,
+                                False,
+                                comment_reason=True,
+                            )
+
+        comment_mock.assert_called_once()
+        _repo, _item, body = comment_mock.call_args.args
+        self.assertIn("abc1234", body)
+        self.assertIn("claude-haiku-4-5-20251001", body)
+        self.assertIn("matches bug pattern", body)
+
+    def test_comment_reason_not_posted_when_dry_run(self):
+        item = make_item(1, "One")
+        suggestion_results = [
+            SuggestionResult(
+                item=item,
+                label_suggestion=LabelSuggestion(
+                    add_labels=["bug"],
+                    remove_labels=[],
+                    reason="",
+                ),
+            )
+        ]
+
+        with mock.patch.object(self.workflow, "print_summary"):
+            with mock.patch(
+                "ai_labelling.workflow.print_changes_summary"
+            ):
+                with mock.patch.object(
+                    self.workflow.github_client,
+                    "post_comment",
+                ) as comment_mock:
+                    self.workflow.review_and_apply_suggestions(
+                        "owner/repo",
+                        suggestion_results,
+                        True,
+                        False,
+                        dry_run=True,
+                        comment_reason=True,
+                    )
+
+        comment_mock.assert_not_called()

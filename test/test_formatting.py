@@ -11,6 +11,7 @@ from ai_labelling.formatting import (
     describe_match_bucket,
     format_body_preview,
     format_body_preview_colourised,
+    format_comment_body,
     format_display_timestamp,
     format_label_block,
     format_reason,
@@ -303,7 +304,7 @@ class FormattingTests(unittest.TestCase):
     def test_format_label_block_uses_bullets(self):
         self.assertEqual(
             format_label_block(["bug", "area:docs,api"]),
-            "  - bug\n  - area:docs,api",
+            "  - area:docs,api\n  - bug",
         )
 
     def test_format_reason_wraps_and_indents(self):
@@ -499,3 +500,134 @@ class ColourisedBodyPreviewTests(unittest.TestCase):
                 "Title\n=====\n\nText.", width=80, max_lines=4
             )
         self.assertIn("[reverse:Title]", result)
+
+
+class CommentBodyTests(unittest.TestCase):
+    """Verify the Markdown comment body generated for labelling actions."""
+
+    def _suggestion(self, add=None, remove=None, reason=""):
+        return LabelSuggestion(
+            add_labels=add or [],
+            remove_labels=remove or [],
+            reason=reason,
+        )
+
+    def test_comment_contains_header_link(self):
+        body = format_comment_body(
+            self._suggestion(add=["bug"]),
+            applied_add=["bug"],
+            applied_remove=[],
+            model="anthropic:claude-haiku-4-5-20251001",
+            version="abc1234",
+            allow_label_removals=False,
+        )
+        self.assertIn("AI-assisted labelling", body)
+        self.assertIn("GenAI-Assisted-Labelling", body)
+
+    def test_comment_contains_version_and_model(self):
+        body = format_comment_body(
+            self._suggestion(add=["bug"]),
+            applied_add=["bug"],
+            applied_remove=[],
+            model="anthropic:claude-haiku-4-5-20251001",
+            version="abc1234",
+            allow_label_removals=False,
+        )
+        self.assertIn("`abc1234`", body)
+        self.assertIn("`anthropic:claude-haiku-4-5-20251001`", body)
+
+    def test_comment_quotes_reasoning(self):
+        body = format_comment_body(
+            self._suggestion(add=["bug"], reason="Matches a crash pattern."),
+            applied_add=["bug"],
+            applied_remove=[],
+            model="m",
+            version="v",
+            allow_label_removals=False,
+        )
+        self.assertIn("> Matches a crash pattern.", body)
+
+    def test_comment_accepted_addition_no_strikethrough(self):
+        body = format_comment_body(
+            self._suggestion(add=["bug"]),
+            applied_add=["bug"],
+            applied_remove=[],
+            model="m",
+            version="v",
+            allow_label_removals=False,
+        )
+        self.assertIn("  - `bug`", body)
+        self.assertNotIn("~~", body)
+
+    def test_comment_rejected_addition_uses_strikethrough(self):
+        body = format_comment_body(
+            self._suggestion(add=["bug", "docs"]),
+            applied_add=["bug"],
+            applied_remove=[],
+            model="m",
+            version="v",
+            allow_label_removals=False,
+        )
+        self.assertIn("  - `bug`", body)
+        self.assertIn("  - ~~`docs`~~ (rejected by operator)", body)
+
+    def test_comment_removals_shown_when_allowed(self):
+        body = format_comment_body(
+            self._suggestion(add=[], remove=["stale"]),
+            applied_add=[],
+            applied_remove=["stale"],
+            model="m",
+            version="v",
+            allow_label_removals=True,
+        )
+        self.assertIn("Suggested removals:", body)
+        self.assertIn("  - `stale`", body)
+
+    def test_comment_removals_hidden_when_disallowed(self):
+        body = format_comment_body(
+            self._suggestion(add=[], remove=["stale"]),
+            applied_add=[],
+            applied_remove=[],
+            model="m",
+            version="v",
+            allow_label_removals=False,
+        )
+        self.assertNotIn("Suggested removals:", body)
+        self.assertNotIn("stale", body)
+
+    def test_comment_rejected_removal_uses_strikethrough(self):
+        body = format_comment_body(
+            self._suggestion(add=[], remove=["stale", "old"]),
+            applied_add=[],
+            applied_remove=["old"],
+            model="m",
+            version="v",
+            allow_label_removals=True,
+        )
+        self.assertIn("  - `old`", body)
+        self.assertIn("  - ~~`stale`~~ (rejected by operator)", body)
+
+    def test_comment_addition_labels_sorted_alphabetically(self):
+        body = format_comment_body(
+            self._suggestion(add=["zzz", "aaa"]),
+            applied_add=["zzz", "aaa"],
+            applied_remove=[],
+            model="m",
+            version="v",
+            allow_label_removals=False,
+        )
+        aaa_pos = body.index("aaa")
+        zzz_pos = body.index("zzz")
+        self.assertLess(aaa_pos, zzz_pos)
+
+    def test_comment_starts_with_heading_and_ends_with_newline(self):
+        body = format_comment_body(
+            self._suggestion(add=["bug"]),
+            applied_add=["bug"],
+            applied_remove=[],
+            model="m",
+            version="v",
+            allow_label_removals=False,
+        )
+        self.assertTrue(body.startswith("## "))
+        self.assertTrue(body.endswith("\n"))

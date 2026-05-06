@@ -72,6 +72,7 @@ class SuggestionResult:
 
     item: WorkItem
     label_suggestion: LabelSuggestion
+    model: str = ""
 
 
 class UserQuit(Exception):
