@@ -495,3 +495,51 @@ class GitHubClientTests(  # pylint: disable=too-many-public-methods
             self.client.set_issue_type("llvm/llvm-project", item, it)
         _args, kwargs = run_mock.call_args
         self.assertIn('"name": "Task"', kwargs["input_text"])
+
+    def test_get_item_returns_issue_when_no_pull_request_key(self):
+        payload = {
+            "number": 5,
+            "title": "Crash on startup",
+            "body": "body text",
+            "state": "open",
+            "labels": [],
+            "html_url": "https://github.com/llvm/llvm-project/issues/5",
+            "updated_at": "2026-05-01T00:00:00Z",
+            "created_at": "2026-05-01T00:00:00Z",
+            "user": {"login": "alice"},
+        }
+        with mock.patch.object(
+            self.client, "json", return_value=payload
+        ) as json_mock:
+            item = self.client.get_item("llvm/llvm-project", 5)
+
+        json_mock.assert_called_once_with(
+            ("api", "repos/llvm/llvm-project/issues/5")
+        )
+        self.assertEqual(item.number, 5)
+        self.assertEqual(item.kind, "issue")
+        self.assertEqual(item.title, "Crash on startup")
+
+    def test_get_item_returns_pr_when_pull_request_key_present(self):
+        payload = {
+            "number": 10,
+            "title": "Fix crash",
+            "body": "",
+            "state": "open",
+            "labels": [],
+            "html_url": "https://github.com/llvm/llvm-project/pull/10",
+            "updated_at": "2026-05-02T00:00:00Z",
+            "created_at": "2026-05-02T00:00:00Z",
+            "user": {"login": "bob"},
+            "pull_request": {"merged_at": None},
+        }
+        with mock.patch.object(self.client, "json", return_value=payload):
+            item = self.client.get_item("llvm/llvm-project", 10)
+
+        self.assertEqual(item.number, 10)
+        self.assertEqual(item.kind, "pr")
+
+    def test_get_item_raises_on_non_dict_payload(self):
+        with mock.patch.object(self.client, "json", return_value=None):
+            with self.assertRaises(RuntimeError):
+                self.client.get_item("llvm/llvm-project", 99)

@@ -91,6 +91,30 @@ class CommentReasonFlagTests(unittest.TestCase):
         self.assertTrue(args.comment_reason)
 
 
+class IdFlagTests(unittest.TestCase):
+    """Check the --id argument."""
+
+    def test_id_defaults_to_none(self):
+        args = build_argument_parser().parse_args([])
+        self.assertIsNone(args.id)
+
+    def test_id_flag_accepts_positive_integer(self):
+        args = build_argument_parser().parse_args(["--id", "42"])
+        self.assertEqual(args.id, 42)
+
+    def test_id_flag_rejects_zero(self):
+        with self.assertRaises(SystemExit):
+            build_argument_parser().parse_args(["--id", "0"])
+
+    def test_id_flag_rejects_negative(self):
+        with self.assertRaises(SystemExit):
+            build_argument_parser().parse_args(["--id", "-1"])
+
+    def test_help_mentions_id_flag(self):
+        help_text = build_argument_parser().format_help()
+        self.assertIn("--id", help_text)
+
+
 class PositiveIntAndRepoArgTests(unittest.TestCase):
     """Check helper argument-type validators."""
 

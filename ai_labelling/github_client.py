@@ -201,6 +201,15 @@ class GitHubClient:
         )
         return items
 
+    def get_item(self, repo: str, number: int) -> WorkItem:
+        """Fetch a single issue or pull request by number."""
+
+        entry = self.json(("api", f"repos/{repo}/issues/{number}"))
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"unexpected payload for #{number}")
+        kind = "pr" if "pull_request" in entry else "issue"
+        return work_item_from_search_result(entry, kind)
+
     def add_labels(
         self,
         repo: str,

@@ -1,5 +1,5 @@
 """Tests for workflow state and control-flow helpers."""
-# pylint: disable=missing-function-docstring
+# pylint: disable=missing-function-docstring,too-many-lines
 
 import argparse
 import unittest
@@ -547,6 +547,49 @@ class WorkflowTests(
         # PR search must have received the remaining limit (2 - 1 = 1)
         pr_call_options = search_mock.call_args_list[1].args[2]
         self.assertEqual(pr_call_options.limit, 1)
+
+    def test_collect_items_id_mode_bypasses_search(self):
+        """--id mode fetches one item directly and ignores filter args."""
+
+        item = make_item(7, "Direct lookup")
+        args = argparse.Namespace(id=7)
+
+        with mock.patch.object(
+            self.workflow.github_client,
+            "get_item",
+            return_value=item,
+        ) as get_mock:
+            with mock.patch.object(
+                self.workflow.github_client,
+                "search_items",
+            ) as search_mock:
+                result = self.workflow.collect_items("llvm/llvm-project", args)
+
+        get_mock.assert_called_once_with("llvm/llvm-project", 7)
+        search_mock.assert_not_called()
+        self.assertEqual(result, [item])
+
+    def test_collect_items_id_none_falls_through_to_normal_search(self):
+        """When --id is absent the usual filter-based search runs."""
+
+        args = argparse.Namespace(
+            id=None,
+            created=False,
+            date=DEFAULT_DATE_CUTOFF,
+            include_closed=False,
+            include_issues=False,
+            include_open=True,
+            include_prs=False,
+            limit=None,
+        )
+
+        with mock.patch.object(
+            self.workflow.github_client, "search_items"
+        ) as search_mock:
+            result = self.workflow.collect_items("llvm/llvm-project", args)
+
+        search_mock.assert_not_called()
+        self.assertEqual(result, [])
 
     def test_print_summary_shows_additions_and_reason(self):
         item = make_item(1, "One", labels=["existing"])

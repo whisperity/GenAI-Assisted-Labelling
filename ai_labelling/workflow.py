@@ -742,6 +742,9 @@ class LabellingWorkflow:
     ) -> List[WorkItem]:
         """Collect and sort matching issues and pull requests."""
 
+        if getattr(args, "id", None) is not None:
+            return [self.github_client.get_item(repo, args.id)]
+
         if not args.include_issues and not args.include_prs:
             return []
         if not args.include_open and not args.include_closed:

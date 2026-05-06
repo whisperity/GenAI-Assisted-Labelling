@@ -121,6 +121,12 @@ def gh_json(argv: Sequence[str]) -> object:
     return _GITHUB_CLIENT.json(argv)
 
 
+def get_item(repo: str, number: int) -> WorkItem:
+    """Fetch a single issue or pull request by its number."""
+
+    return _GITHUB_CLIENT.get_item(repo, number)
+
+
 def list_issue_types(repo: str) -> list[IssueTypeDefinition]:
     """Fetch issue types for the repository's organisation."""
 

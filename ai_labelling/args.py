@@ -242,6 +242,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "if available."
         ),
     )
+    github_group.add_argument(
+        "--id",
+        type=positive_int,
+        metavar="NUMBER",
+        help=(
+            "Fetch and handle exactly one issue or pull request by its "
+            "number. The tool automatically detects whether the number "
+            "refers to an issue or a pull request. **ALL** filter options "
+            "are ignored in this mode."
+        ),
+    )
 
     ai_group.add_argument(
         "--model",
