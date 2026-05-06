@@ -8,6 +8,7 @@
  * GitHub command-line client, `gh`: https://cli.github.com
  * Access to a generative AI service which the script can prompt
    - ChatGPT subscription with Codex (https://chatgpt.com/codex) access, and the `codex` binary set up and logged in to
+   - Claude Platform (https://platform.claude.com) API key set in the `ANTHROPIC_API_KEY` environment variable
 
 ## Usage
 
