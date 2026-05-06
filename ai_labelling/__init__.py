@@ -48,9 +48,9 @@ from ai_labelling.formatting import (
     non_empty_lines,
     parse_github_timestamp,
     parse_preview_blocks,
+    print_changes_summary,
     print_exception_diagnostics,
     print_item_details,
-    print_dry_run_summary,
     print_match_summary,
     print_matching_items,
     print_prompt_help,
@@ -289,17 +289,10 @@ def run_ai_batch(
 def print_summary(
     item: WorkItem,
     label_suggestion: LabelSuggestion,
-    force: bool,
-    allow_label_removals: bool,
 ) -> None:
     """Print the suggested label changes for one work item."""
 
-    LabellingWorkflow.print_summary(
-        item,
-        label_suggestion,
-        force,
-        allow_label_removals,
-    )
+    LabellingWorkflow.print_summary(item, label_suggestion)
 
 
 def review_and_apply_suggestions(  # pylint: disable=too-many-arguments

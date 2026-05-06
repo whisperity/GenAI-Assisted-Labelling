@@ -14,7 +14,7 @@ from ai_labelling.formatting import (
     format_display_timestamp,
     format_label_block,
     format_reason,
-    print_dry_run_summary,
+    print_changes_summary,
     print_exception_diagnostics,
     print_item_details,
     print_match_summary,
@@ -63,7 +63,7 @@ class PrintHelpersTests(unittest.TestCase):
         self.assertIn("#42", printed)
         self.assertIn("octocat", printed)
 
-    def test_print_dry_run_summary_lists_add_labels(self):
+    def test_print_changes_summary_dry_run_lists_add_labels(self):
         results = [
             SuggestionResult(
                 item=make_item(7, "Fix crash", labels=[]),
@@ -75,19 +75,44 @@ class PrintHelpersTests(unittest.TestCase):
             ),
         ]
         with mock.patch("builtins.print") as print_mock:
-            print_dry_run_summary(results, allow_label_removals=False)
+            print_changes_summary(results, allow_label_removals=False)
 
         printed = "\n".join(
             str(c.args[0])
             for c in print_mock.call_args_list
             if c.args
         )
+        self.assertIn("Label changes (not applied):", printed)
         self.assertIn("Fix crash", printed)
         self.assertIn("#7", printed)
-        self.assertIn("+bug", printed)
-        self.assertIn("+crash", printed)
+        self.assertIn("+ bug", printed)
+        self.assertIn("+ crash", printed)
 
-    def test_print_dry_run_summary_shows_removals_when_allowed(self):
+    def test_print_changes_summary_non_dry_run_uses_label_changes_title(self):
+        results = [
+            SuggestionResult(
+                item=make_item(7, "Fix crash", labels=[]),
+                label_suggestion=LabelSuggestion(
+                    add_labels=["bug"],
+                    remove_labels=[],
+                    reason="",
+                ),
+            ),
+        ]
+        with mock.patch("builtins.print") as print_mock:
+            print_changes_summary(
+                results, allow_label_removals=False, dry_run=False
+            )
+
+        printed = "\n".join(
+            str(c.args[0])
+            for c in print_mock.call_args_list
+            if c.args
+        )
+        self.assertIn("Label changes:", printed)
+        self.assertNotIn("not applied", printed)
+
+    def test_print_changes_summary_shows_removals_when_allowed(self):
         results = [
             SuggestionResult(
                 item=make_item(8, "Clean up"),
@@ -99,16 +124,16 @@ class PrintHelpersTests(unittest.TestCase):
             ),
         ]
         with mock.patch("builtins.print") as print_mock:
-            print_dry_run_summary(results, allow_label_removals=True)
+            print_changes_summary(results, allow_label_removals=True)
 
         printed = "\n".join(
             str(c.args[0])
             for c in print_mock.call_args_list
             if c.args
         )
-        self.assertIn("-stale", printed)
+        self.assertIn("- stale", printed)
 
-    def test_print_dry_run_summary_hides_removals_when_disabled(self):
+    def test_print_changes_summary_hides_removals_when_disabled(self):
         results = [
             SuggestionResult(
                 item=make_item(9, "Old issue"),
@@ -120,15 +145,58 @@ class PrintHelpersTests(unittest.TestCase):
             ),
         ]
         with mock.patch("builtins.print") as print_mock:
-            print_dry_run_summary(results, allow_label_removals=False)
+            print_changes_summary(results, allow_label_removals=False)
 
         printed = "\n".join(
             str(c.args[0])
             for c in print_mock.call_args_list
             if c.args
         )
-        self.assertNotIn("-stale", printed)
-        self.assertIn("no changes suggested", printed)
+        self.assertNotIn("stale", printed)
+
+    def test_print_changes_summary_skips_items_with_no_changes(self):
+        results = [
+            SuggestionResult(
+                item=make_item(9, "Old issue"),
+                label_suggestion=LabelSuggestion(
+                    add_labels=[],
+                    remove_labels=[],
+                    reason="",
+                ),
+            ),
+        ]
+        with mock.patch("builtins.print") as print_mock:
+            print_changes_summary(results, allow_label_removals=True)
+
+        printed = "\n".join(
+            str(c.args[0])
+            for c in print_mock.call_args_list
+            if c.args
+        )
+        self.assertNotIn("Old issue", printed)
+
+    def test_print_changes_summary_indents_item_and_labels(self):
+        results = [
+            SuggestionResult(
+                item=make_item(5, "Add feature"),
+                label_suggestion=LabelSuggestion(
+                    add_labels=["enhancement"],
+                    remove_labels=[],
+                    reason="",
+                ),
+            ),
+        ]
+        with mock.patch("builtins.print") as print_mock:
+            print_changes_summary(results, allow_label_removals=False)
+
+        call_args = [
+            str(c.args[0]) for c in print_mock.call_args_list if c.args
+        ]
+        item_line = next(s for s in call_args if "#5" in s)
+        self.assertTrue(item_line.startswith("- "))
+
+        label_line = next(s for s in call_args if "enhancement" in s)
+        self.assertTrue(label_line.startswith("  "))
 
     def test_print_exception_diagnostics_writes_context_to_stderr(self):
         exc = RuntimeError("something failed")

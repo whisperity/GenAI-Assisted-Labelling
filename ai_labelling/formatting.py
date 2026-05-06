@@ -523,49 +523,42 @@ def print_match_summary(items: Sequence[WorkItem]) -> None:
         print(f"  - {words[0].capitalize()} {words[1]}: {len(bucket_items)}")
 
 
-def print_dry_run_summary(
+def print_changes_summary(
     suggestion_results: Sequence[SuggestionResult],
     allow_label_removals: bool,
+    *,
+    dry_run: bool = True,
 ) -> None:
-    """Print a read-only label-change summary for a dry run."""
+    """Print a label-change summary after a run."""
 
-    print(
-        colourise(
-            "Dry-run label summary (no changes applied):",
-            "blue",
-            bold=True,
-        )
+    title = (
+        "Label changes (not applied):"
+        if dry_run
+        else "Label changes:"
     )
+    print(colourise(title, "blue", bold=True))
     for result in suggestion_results:
         item = result.item
         suggestion = result.label_suggestion
-        state_colour = (
-            "green" if item.state.casefold() == "open" else "red"
-        )
-        parts: List[str] = []
-        if suggestion.add_labels:
-            parts.append(", ".join(
-                colourise(f"+{lbl}", "green")
-                for lbl in suggestion.add_labels
-            ))
-        if allow_label_removals and suggestion.remove_labels:
-            parts.append(", ".join(
-                colourise(f"-{lbl}", "magenta")
-                for lbl in suggestion.remove_labels
-            ))
-        changes = (
-            "  ".join(parts)
-            if parts
-            else colourise("(no changes suggested)", "grey")
-        )
+        has_adds = bool(suggestion.add_labels)
+        has_removes = allow_label_removals and bool(suggestion.remove_labels)
+        if not has_adds and not has_removes:
+            continue
+        state_colour = "green" if item.state.casefold() == "open" else "red"
+        kind_display = "issue" if item.kind == "issue" else "PR"
         print(
             "- "
+            + colourise(f"#{item.number}", "yellow", bold=True)
+            + " "
             + item.title
             + " "
-            + colourise(f"(#{item.number})", "yellow", bold=True)
-            + " "
-            + colourise(f"[{item.state}]", state_colour, bold=True)
-            + "  "
-            + changes
+            + colourise(
+                f"[{item.state} {kind_display}]", state_colour, bold=True
+            )
         )
+        for lbl in suggestion.add_labels:
+            print("  " + colourise(f"+ {lbl}", "green"))
+        if allow_label_removals:
+            for lbl in suggestion.remove_labels:
+                print("  " + colourise(f"- {lbl}", "magenta"))
     print()

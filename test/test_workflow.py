@@ -155,21 +155,24 @@ class WorkflowTests(
         answers = iter(["a", "d"])
 
         with mock.patch.object(self.workflow, "print_summary"):
-            with mock.patch.object(
-                self.workflow,
-                "add_labels_with_retry",
-            ) as add_mock:
+            with mock.patch(
+                "ai_labelling.workflow.print_changes_summary"
+            ):
                 with mock.patch.object(
                     self.workflow,
-                    "remove_label_with_retry",
-                ) as remove_mock:
-                    self.workflow.review_and_apply_suggestions(
-                        "llvm/llvm-project",
-                        suggestion_results,
-                        False,
-                        True,
-                        input_fn=lambda _: next(answers),
-                    )
+                    "add_labels_with_retry",
+                ) as add_mock:
+                    with mock.patch.object(
+                        self.workflow,
+                        "remove_label_with_retry",
+                    ) as remove_mock:
+                        self.workflow.review_and_apply_suggestions(
+                            "llvm/llvm-project",
+                            suggestion_results,
+                            False,
+                            True,
+                            input_fn=lambda _: next(answers),
+                        )
 
         self.assertEqual(add_mock.call_count, 2)
         self.assertEqual(remove_mock.call_count, 0)
@@ -191,20 +194,23 @@ class WorkflowTests(
         ]
 
         with mock.patch.object(self.workflow, "print_summary"):
-            with mock.patch.object(
-                self.workflow,
-                "add_labels_with_retry",
-            ) as add_mock:
+            with mock.patch(
+                "ai_labelling.workflow.print_changes_summary"
+            ):
                 with mock.patch.object(
                     self.workflow,
-                    "remove_label_with_retry",
-                ) as remove_mock:
-                    self.workflow.review_and_apply_suggestions(
-                        "llvm/llvm-project",
-                        suggestion_results,
-                        True,
-                        True,
-                    )
+                    "add_labels_with_retry",
+                ) as add_mock:
+                    with mock.patch.object(
+                        self.workflow,
+                        "remove_label_with_retry",
+                    ) as remove_mock:
+                        self.workflow.review_and_apply_suggestions(
+                            "llvm/llvm-project",
+                            suggestion_results,
+                            True,
+                            True,
+                        )
 
         add_mock.assert_called_once()
         remove_mock.assert_called_once_with(
@@ -551,23 +557,18 @@ class WorkflowTests(
 
         with mock.patch("ai_labelling.workflow.print_item_details"):
             with mock.patch("builtins.print") as print_mock:
-                LabellingWorkflow.print_summary(
-                    item,
-                    suggestion,
-                    force=False,
-                    allow_label_removals=False,
-                )
+                LabellingWorkflow.print_summary(item, suggestion)
 
         printed = "\n".join(
             str(call.args[0])
             for call in print_mock.call_args_list
             if call.args
         )
-        self.assertIn("would add", printed)
+        self.assertIn("Suggested additions:", printed)
         self.assertIn("bug", printed)
         self.assertIn("Matches bug pattern.", printed)
 
-    def test_print_summary_no_labels_shows_none_to_add(self):
+    def test_print_summary_no_additions_omits_suggested_additions(self):
         item = make_item(1, "One")
         suggestion = LabelSuggestion(
             add_labels=[], remove_labels=[], reason=""
@@ -575,21 +576,16 @@ class WorkflowTests(
 
         with mock.patch("ai_labelling.workflow.print_item_details"):
             with mock.patch("builtins.print") as print_mock:
-                LabellingWorkflow.print_summary(
-                    item,
-                    suggestion,
-                    force=False,
-                    allow_label_removals=False,
-                )
+                LabellingWorkflow.print_summary(item, suggestion)
 
         printed = "\n".join(
             str(call.args[0])
             for call in print_mock.call_args_list
             if call.args
         )
-        self.assertIn("no new labels to add", printed)
+        self.assertNotIn("Suggested additions:", printed)
 
-    def test_print_summary_removals_disabled_shows_note(self):
+    def test_print_summary_shows_removals_when_suggested(self):
         item = make_item(1, "One", labels=["old"])
         suggestion = LabelSuggestion(
             add_labels=[], remove_labels=["old"], reason=""
@@ -597,19 +593,15 @@ class WorkflowTests(
 
         with mock.patch("ai_labelling.workflow.print_item_details"):
             with mock.patch("builtins.print") as print_mock:
-                LabellingWorkflow.print_summary(
-                    item,
-                    suggestion,
-                    force=False,
-                    allow_label_removals=False,
-                )
+                LabellingWorkflow.print_summary(item, suggestion)
 
         printed = "\n".join(
             str(call.args[0])
             for call in print_mock.call_args_list
             if call.args
         )
-        self.assertIn("removals are disabled", printed)
+        self.assertIn("Suggested removals:", printed)
+        self.assertIn("old", printed)
 
     def test_review_dry_run_skips_applying_labels(self):
         suggestion_results = [
@@ -624,13 +616,15 @@ class WorkflowTests(
         ]
 
         with mock.patch.object(self.workflow, "print_summary"):
-            with mock.patch.object(
-                self.workflow, "add_labels_with_retry"
-            ) as add_mock:
+            with mock.patch(
+                "ai_labelling.workflow.print_changes_summary"
+            ):
                 with mock.patch.object(
-                    self.workflow, "remove_label_with_retry"
-                ) as remove_mock:
-                    with mock.patch("builtins.print"):
+                    self.workflow, "add_labels_with_retry"
+                ) as add_mock:
+                    with mock.patch.object(
+                        self.workflow, "remove_label_with_retry"
+                    ) as remove_mock:
                         self.workflow.review_and_apply_suggestions(
                             "owner/repo",
                             suggestion_results,
@@ -642,7 +636,7 @@ class WorkflowTests(
         add_mock.assert_not_called()
         remove_mock.assert_not_called()
 
-    def test_review_dry_run_prints_summary(self):
+    def test_review_dry_run_prints_summary_with_dry_run_flag(self):
         suggestion_results = [
             SuggestionResult(
                 item=make_item(1, "One"),
@@ -656,8 +650,8 @@ class WorkflowTests(
 
         with mock.patch.object(self.workflow, "print_summary"):
             with mock.patch(
-                "ai_labelling.workflow.print_dry_run_summary"
-            ) as dry_mock:
+                "ai_labelling.workflow.print_changes_summary"
+            ) as summary_mock:
                 self.workflow.review_and_apply_suggestions(
                     "owner/repo",
                     suggestion_results,
@@ -666,9 +660,46 @@ class WorkflowTests(
                     dry_run=True,
                 )
 
-        dry_mock.assert_called_once_with(suggestion_results, False)
+        summary_mock.assert_called_once_with(
+            suggestion_results, False, dry_run=True
+        )
 
-    def test_print_summary_force_uses_present_tense(self):
+    def test_review_non_dry_run_prints_summary_with_applied_changes(self):
+        suggestion_results = [
+            SuggestionResult(
+                item=make_item(1, "One"),
+                label_suggestion=LabelSuggestion(
+                    add_labels=["bug"],
+                    remove_labels=[],
+                    reason="r",
+                ),
+            )
+        ]
+
+        with mock.patch.object(self.workflow, "print_summary"):
+            with mock.patch(
+                "ai_labelling.workflow.print_changes_summary"
+            ) as summary_mock:
+                with mock.patch.object(
+                    self.workflow, "add_labels_with_retry"
+                ):
+                    self.workflow.review_and_apply_suggestions(
+                        "owner/repo",
+                        suggestion_results,
+                        True,
+                        False,
+                        dry_run=False,
+                    )
+
+        summary_mock.assert_called_once()
+        _results, _allow, kwargs = (
+            summary_mock.call_args.args[0],
+            summary_mock.call_args.args[1],
+            summary_mock.call_args.kwargs,
+        )
+        self.assertFalse(kwargs.get("dry_run", True))
+
+    def test_print_summary_shows_both_additions_and_removals(self):
         item = make_item(1, "One")
         suggestion = LabelSuggestion(
             add_labels=["bug"], remove_labels=["old"], reason=""
@@ -676,17 +707,12 @@ class WorkflowTests(
 
         with mock.patch("ai_labelling.workflow.print_item_details"):
             with mock.patch("builtins.print") as print_mock:
-                LabellingWorkflow.print_summary(
-                    item,
-                    suggestion,
-                    force=True,
-                    allow_label_removals=True,
-                )
+                LabellingWorkflow.print_summary(item, suggestion)
 
         printed = "\n".join(
             str(call.args[0])
             for call in print_mock.call_args_list
             if call.args
         )
-        self.assertIn("adding", printed)
-        self.assertIn("removing", printed)
+        self.assertIn("Suggested additions:", printed)
+        self.assertIn("Suggested removals:", printed)

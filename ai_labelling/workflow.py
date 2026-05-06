@@ -15,7 +15,7 @@ from ai_labelling.config import (
 from ai_labelling.formatting import (
     format_label_block,
     format_reason,
-    print_dry_run_summary,
+    print_changes_summary,
     print_exception_diagnostics,
     print_item_details,
     print_prompt_help,
@@ -431,13 +431,9 @@ class LabellingWorkflow:
     def print_summary(
         item: WorkItem,
         label_suggestion: LabelSuggestion,
-        force: bool,
-        allow_label_removals: bool,
     ) -> None:
         """Print the suggested label changes for one work item."""
 
-        addition_action = "would add" if not force else "adding"
-        removal_action = "would remove" if not force else "removing"
         print_item_details(item)
         print(colourise("Existing labels:", "blue", bold=True))
         print(format_label_block(item.labels))
@@ -450,30 +446,6 @@ class LabellingWorkflow:
         if label_suggestion.reason:
             print(colourise("Reason:", "blue", bold=True))
             print(format_reason(label_suggestion.reason))
-        if label_suggestion.add_labels:
-            print(
-                colourise("Action: ", "green", bold=True)
-                + f"{addition_action} "
-                + f"{', '.join(label_suggestion.add_labels)}"
-            )
-        else:
-            print(
-                colourise("Action: ", "green", bold=True)
-                + "no new labels to add"
-            )
-        if label_suggestion.remove_labels:
-            if allow_label_removals:
-                print(
-                    colourise("Action: ", "magenta", bold=True)
-                    + f"{removal_action} "
-                    + f"{', '.join(label_suggestion.remove_labels)}"
-                )
-            else:
-                print(
-                    colourise("Note: ", "yellow", bold=True)
-                    + "removals are disabled; rerun with "
-                    + "'--allow-label-removals' to apply them."
-                )
         print()
 
     def review_and_apply_suggestions(
@@ -493,10 +465,11 @@ class LabellingWorkflow:
             labels: Sequence[str],
             *,
             removal: bool,
-        ) -> None:
+        ) -> List[str]:
             if not labels:
-                return
+                return []
 
+            applied: List[str] = []
             apply_remaining = force
             skip_remaining = False
             kind_display = "issue" if item.kind == "issue" else "PR"
@@ -549,29 +522,43 @@ class LabellingWorkflow:
                             [label],
                             input_fn=input_fn,
                         )
+                    applied.append(label)
 
+            return applied
+
+        summary_results: List[SuggestionResult] = []
         for result in suggestion_results:
-            self.print_summary(
-                result.item,
-                result.label_suggestion,
-                force,
-                allow_label_removals,
-            )
-            if not dry_run:
-                apply_label_change_bucket(
+            self.print_summary(result.item, result.label_suggestion)
+            if dry_run:
+                summary_results.append(result)
+            else:
+                applied_add = apply_label_change_bucket(
                     result.item,
                     result.label_suggestion.add_labels,
                     removal=False,
                 )
+                applied_remove: List[str] = []
                 if allow_label_removals:
-                    apply_label_change_bucket(
+                    applied_remove = apply_label_change_bucket(
                         result.item,
                         result.label_suggestion.remove_labels,
                         removal=True,
                     )
+                if applied_add or applied_remove:
+                    summary_results.append(
+                        SuggestionResult(
+                            item=result.item,
+                            label_suggestion=LabelSuggestion(
+                                applied_add,
+                                applied_remove,
+                                result.label_suggestion.reason,
+                            ),
+                        )
+                    )
 
-        if dry_run:
-            print_dry_run_summary(suggestion_results, allow_label_removals)
+        print_changes_summary(
+            summary_results, allow_label_removals, dry_run=dry_run
+        )
 
     def collect_items(
         self,
