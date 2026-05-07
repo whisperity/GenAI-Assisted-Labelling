@@ -29,6 +29,7 @@ from ai_labelling.models import (
     LabelSuggestion,
     SearchOptions,
     SuggestionResult,
+    UserQuit,
     WorkItem,
     parse_github_timestamp,
 )
@@ -473,6 +474,137 @@ class LabellingWorkflow:
                         label_suggestion=LabelSuggestion(
                             applied[0],  # add
                             applied[1],  # remove
+                            result.label_suggestion.reason,
+                            issue_type=applied[2],
+                        ),
+                        model=result.model,
+                    )
+                )
+            if comment_reason:
+                self._post_comment_for_result(
+                    repo,
+                    result,
+                    applied_add=applied[0],
+                    applied_remove=applied[1],
+                    applied_issue_type=applied[2],
+                    version=version,
+                    allow_label_removals=allow_label_removals,
+                )
+
+        print_changes_summary(
+            summary_results, allow_label_removals, dry_run=dry_run
+        )
+
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    # pylint: disable=too-many-branches
+    def run_interactive_mode(
+        self,
+        repo: str,
+        valid_labels: Sequence[LabelDefinition],
+        model: str,
+        allow_label_removals: bool,
+        *,
+        dry_run: bool = False,
+        comment_reason: bool = False,
+        valid_issue_types: Sequence[IssueTypeDefinition] = (),
+        input_fn: Callable[[str], str] = input,
+    ) -> None:
+        """Interactively handle items by number until the user quits.
+
+        Labels are queried once; the user enters one issue/PR number per
+        iteration. All filter and '--id' options are ignored.
+        """
+
+        issue_type_map = {t.name.casefold(): t for t in valid_issue_types}
+        version = get_script_version() if comment_reason else ""
+        summary_results: List[SuggestionResult] = []
+
+        while True:
+            try:
+                raw = input_fn(
+                    colourise(
+                        "Issue/PR number ('q' to exit): ",
+                        "cyan",
+                        bold=True,
+                    )
+                ).strip()
+            except EOFError:
+                break
+            if not raw:
+                continue
+            if raw.casefold() in {"q", "quit"}:
+                break
+            try:
+                number = int(raw)
+                if number <= 0:
+                    raise ValueError("not positive")
+            except ValueError:
+                print(
+                    colourise(f"Invalid number: {raw!r}", "red", bold=True)
+                )
+                continue
+
+            try:
+                item = self.github_client.get_item(repo, number)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                print_exception_diagnostics(exc, f"Fetching #{number}")
+                continue
+
+            print_item_details(item)
+            try:
+                answer = prompt_confirmation(
+                    f"Handle {item.kind.upper()} #{item.number} with AI? "
+                    "[y/n/q/?] ",
+                    allow_apply_all=False,
+                    input_fn=input_fn,
+                )
+            except UserQuit:
+                break
+            if answer == "N":
+                print(
+                    colourise(
+                        f"Skipping {item.kind.upper()} #{item.number}.",
+                        "magenta",
+                        bold=True,
+                    )
+                )
+                print()
+                continue
+
+            result = self.build_suggestion_result_with_retry(
+                item,
+                valid_labels,
+                model,
+                allow_label_removals,
+                input_fn=input_fn,
+                valid_issue_types=valid_issue_types,
+            )
+            if result is None:
+                continue
+
+            self.print_summary(result.item, result.label_suggestion)
+            if dry_run:
+                summary_results.append(result)
+                continue
+
+            try:
+                applied = self._apply_one_result(
+                    repo,
+                    result,
+                    force=False,
+                    allow_label_removals=allow_label_removals,
+                    issue_type_map=issue_type_map,
+                    input_fn=input_fn,
+                )
+            except UserQuit:
+                break
+            if any(applied):
+                summary_results.append(
+                    SuggestionResult(
+                        item=result.item,
+                        label_suggestion=LabelSuggestion(
+                            applied[0],
+                            applied[1],
                             result.label_suggestion.reason,
                             issue_type=applied[2],
                         ),

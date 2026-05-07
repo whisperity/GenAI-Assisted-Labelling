@@ -111,6 +111,23 @@ def main() -> int:
 
     valid_issue_types = list_issue_types(repo)
 
+    if args.interactive:
+        print(colourise("Repository: ", "blue", bold=True) + repo)
+        print(
+            colourise("Labels: ", "blue", bold=True) + str(len(valid_labels))
+        )
+        print()
+        _WORKFLOW.run_interactive_mode(
+            repo,
+            valid_labels,
+            args.model,
+            args.allow_label_removals,
+            dry_run=args.dry_run,
+            comment_reason=args.comment_reason,
+            valid_issue_types=valid_issue_types,
+        )
+        return 0
+
     items = collect_items(repo, args)
     if not items:
         print(

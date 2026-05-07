@@ -428,7 +428,10 @@ class FormattingTests(unittest.TestCase):
 
     def test_print_match_summary_uses_single_line_for_one_bucket(self):
         item = make_item(1, "One")
-        with mock.patch("builtins.print") as print_mock:
+        with mock.patch(
+            "ai_labelling.formatting.colourise",
+            side_effect=lambda t, *_a, **_kw: t,
+        ), mock.patch("builtins.print") as print_mock:
             print_match_summary([item])
 
         printed = [call.args[0] for call in print_mock.call_args_list]
@@ -438,7 +441,10 @@ class FormattingTests(unittest.TestCase):
         open_issue = make_item(1, "Issue")
         closed_pr = make_item(2, "PR", kind="pr", state="closed")
 
-        with mock.patch("builtins.print") as print_mock:
+        with mock.patch(
+            "ai_labelling.formatting.colourise",
+            side_effect=lambda t, *_a, **_kw: t,
+        ), mock.patch("builtins.print") as print_mock:
             print_match_summary([open_issue, closed_pr])
 
         printed = [call.args[0] for call in print_mock.call_args_list]
@@ -455,47 +461,61 @@ class FormattingTests(unittest.TestCase):
 class InlineMarkdownColourisationTests(unittest.TestCase):
     """Verify Markdown stripping and colour assignment for inline spans."""
 
-    def test_bold_markers_stripped(self):
-        self.assertEqual(
-            colourise_inline_markdown("**bold** text"),
-            "bold text",
+    def _no_colour(self):
+        """Context manager: colourise → identity (tests stripping only)."""
+        return mock.patch(
+            "ai_labelling.formatting.colourise",
+            side_effect=lambda t, *_a, **_kw: t,
         )
+
+    def test_bold_markers_stripped(self):
+        with self._no_colour():
+            self.assertEqual(
+                colourise_inline_markdown("**bold** text"),
+                "bold text",
+            )
 
     def test_italic_star_markers_stripped(self):
-        self.assertEqual(
-            colourise_inline_markdown("*italic* text"),
-            "italic text",
-        )
+        with self._no_colour():
+            self.assertEqual(
+                colourise_inline_markdown("*italic* text"),
+                "italic text",
+            )
 
     def test_italic_underscore_markers_stripped(self):
-        self.assertEqual(
-            colourise_inline_markdown("_italic_ text"),
-            "italic text",
-        )
+        with self._no_colour():
+            self.assertEqual(
+                colourise_inline_markdown("_italic_ text"),
+                "italic text",
+            )
 
     def test_bold_italic_markers_stripped(self):
-        self.assertEqual(
-            colourise_inline_markdown("***both*** text"),
-            "both text",
-        )
+        with self._no_colour():
+            self.assertEqual(
+                colourise_inline_markdown("***both*** text"),
+                "both text",
+            )
 
     def test_inline_code_backticks_stripped(self):
-        self.assertEqual(
-            colourise_inline_markdown("call `make` to build"),
-            "call make to build",
-        )
+        with self._no_colour():
+            self.assertEqual(
+                colourise_inline_markdown("call `make` to build"),
+                "call make to build",
+            )
 
     def test_mixed_spans_all_stripped(self):
-        self.assertEqual(
-            colourise_inline_markdown("**bold** and *italic* text"),
-            "bold and italic text",
-        )
+        with self._no_colour():
+            self.assertEqual(
+                colourise_inline_markdown("**bold** and *italic* text"),
+                "bold and italic text",
+            )
 
     def test_plain_line_unchanged(self):
-        self.assertEqual(
-            colourise_inline_markdown("plain text line"),
-            "plain text line",
-        )
+        with self._no_colour():
+            self.assertEqual(
+                colourise_inline_markdown("plain text line"),
+                "plain text line",
+            )
 
     def test_empty_line_unchanged(self):
         self.assertEqual(colourise_inline_markdown(""), "")

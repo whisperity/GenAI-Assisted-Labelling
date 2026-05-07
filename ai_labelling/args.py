@@ -85,6 +85,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
     ai_group = parser.add_argument_group("artificial intelligence options")
     action_group = parser.add_argument_group("action options")
 
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help=(
+            "Enter an interactive loop where issue or pull request numbers "
+            "are entered one at a time. All filter options and '--id' are "
+            "ignored in this mode. Labels are queried once for the "
+            "repository. Enter 'q' or 'quit' to exit the loop."
+        ),
+    )
+
     issue_group = filter_group.add_mutually_exclusive_group()
     issue_group.add_argument(
         "--issues",

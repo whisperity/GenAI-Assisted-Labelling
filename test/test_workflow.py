@@ -1154,3 +1154,283 @@ class WorkflowTests(  # pylint: disable=too-many-public-methods
             )
 
         comment_mock.assert_not_called()
+
+
+class InteractiveModeTests(unittest.TestCase):
+    """Verify the interactive number-entry loop in run_interactive_mode."""
+
+    def setUp(self):
+        self.workflow = LabellingWorkflow()
+
+    def _run(self, inputs, *, dry_run=False, allow_removals=False,
+             issue_types=()):
+        """Helper: run interactive mode with a fixed input sequence."""
+
+        answers = iter(inputs)
+        with mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch("ai_labelling.workflow.print_item_details"), \
+                mock.patch("builtins.print"):
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [LabelDefinition("bug", "a bug")],
+                "anthropic",
+                allow_removals,
+                dry_run=dry_run,
+                valid_issue_types=list(issue_types),
+                input_fn=lambda _: next(answers),
+            )
+
+    def test_empty_input_reprompts_without_exiting(self):
+        answers = iter(["", "", "q"])
+        call_count = [0]
+
+        def counting_input(_):
+            call_count[0] += 1
+            return next(answers)
+
+        with mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch("builtins.print"):
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [],
+                "anthropic",
+                False,
+                input_fn=counting_input,
+            )
+
+        self.assertGreaterEqual(call_count[0], 3)
+
+    def test_q_exits_loop(self):
+        with mock.patch("ai_labelling.workflow.print_changes_summary") as s, \
+                mock.patch("builtins.print"):
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [],
+                "anthropic",
+                False,
+                input_fn=lambda _: "q",
+            )
+        s.assert_called_once()
+
+    def test_quit_exits_loop(self):
+        with mock.patch("ai_labelling.workflow.print_changes_summary") as s, \
+                mock.patch("builtins.print"):
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [],
+                "anthropic",
+                False,
+                input_fn=lambda _: "quit",
+            )
+        s.assert_called_once()
+
+    def test_invalid_number_prints_error_and_continues(self):
+        answers = iter(["abc", "q"])
+        with mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch("builtins.print") as print_mock:
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [],
+                "anthropic",
+                False,
+                input_fn=lambda _: next(answers),
+            )
+        msgs = [str(c) for c in print_mock.call_args_list]
+        self.assertTrue(any("abc" in m for m in msgs))
+
+    def test_negative_number_prints_error(self):
+        answers = iter(["-1", "q"])
+        with mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch("builtins.print") as print_mock:
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [],
+                "anthropic",
+                False,
+                input_fn=lambda _: next(answers),
+            )
+        msgs = [str(c) for c in print_mock.call_args_list]
+        self.assertTrue(any("-1" in m for m in msgs))
+
+    def test_fetch_error_continues_loop(self):
+        answers = iter(["1", "q"])
+
+        with mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch("ai_labelling.workflow.print_item_details"), \
+                mock.patch(
+                    "ai_labelling.workflow.print_exception_diagnostics"
+                ) as diag_mock, \
+                mock.patch.object(
+                    self.workflow.github_client,
+                    "get_item",
+                    side_effect=RuntimeError("not found"),
+                ), \
+                mock.patch("builtins.print"):
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [],
+                "anthropic",
+                False,
+                input_fn=lambda _: next(answers),
+            )
+
+        diag_mock.assert_called_once()
+
+    def test_n_skips_item_without_ai(self):
+        item = make_item(1, "One")
+        answers = iter(["1", "n", "q"])
+
+        with mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch("ai_labelling.workflow.print_item_details"), \
+                mock.patch.object(
+                    self.workflow.github_client, "get_item", return_value=item
+                ), \
+                mock.patch.object(
+                    self.workflow,
+                    "build_suggestion_result_with_retry",
+                ) as ai_mock, \
+                mock.patch("builtins.print"):
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [],
+                "anthropic",
+                False,
+                input_fn=lambda _: next(answers),
+            )
+
+        ai_mock.assert_not_called()
+
+    def test_userquit_at_handle_prompt_exits_loop(self):
+        item = make_item(1, "One")
+        answers = iter(["1", "q"])
+
+        with mock.patch("ai_labelling.workflow.print_changes_summary") as s, \
+                mock.patch("ai_labelling.workflow.print_item_details"), \
+                mock.patch.object(
+                    self.workflow.github_client, "get_item", return_value=item
+                ), \
+                mock.patch.object(
+                    self.workflow, "build_suggestion_result_with_retry"
+                ) as ai_mock, \
+                mock.patch("builtins.print"):
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [],
+                "anthropic",
+                False,
+                input_fn=lambda _: next(answers),
+            )
+
+        ai_mock.assert_not_called()
+        s.assert_called_once()
+
+    def test_full_pipeline_applies_label(self):
+        item = make_item(1, "One")
+        suggestion = LabelSuggestion(
+            add_labels=["bug"], remove_labels=[], reason="looks like a bug"
+        )
+        result = SuggestionResult(item=item, label_suggestion=suggestion)
+        answers = iter(["1", "y", "y", "q"])
+
+        with mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch("ai_labelling.workflow.print_item_details"), \
+                mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch.object(
+                    self.workflow.github_client, "get_item", return_value=item
+                ), \
+                mock.patch.object(
+                    self.workflow,
+                    "build_suggestion_result_with_retry",
+                    return_value=result,
+                ), \
+                mock.patch.object(
+                    self.workflow, "add_labels_with_retry"
+                ) as add_mock, \
+                mock.patch("builtins.print"):
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [LabelDefinition("bug", "a bug")],
+                "anthropic",
+                False,
+                input_fn=lambda _: next(answers),
+            )
+
+        add_mock.assert_called_once()
+        self.assertIn("bug", add_mock.call_args.args[2])
+
+    def test_userquit_during_apply_exits_loop(self):
+        item = make_item(1, "One")
+        suggestion = LabelSuggestion(
+            add_labels=["bug"], remove_labels=[], reason="r"
+        )
+        result = SuggestionResult(item=item, label_suggestion=suggestion)
+
+        def inputs(prompt):
+            if "Issue/PR" in prompt:
+                return "1"
+            if "with AI" in prompt:
+                return "y"
+            raise UserQuit  # q at the label-add prompt
+
+        with mock.patch("ai_labelling.workflow.print_changes_summary") as s, \
+                mock.patch("ai_labelling.workflow.print_item_details"), \
+                mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch.object(
+                    self.workflow.github_client, "get_item", return_value=item
+                ), \
+                mock.patch.object(
+                    self.workflow,
+                    "build_suggestion_result_with_retry",
+                    return_value=result,
+                ), \
+                mock.patch.object(
+                    self.workflow, "add_labels_with_retry"
+                ) as add_mock, \
+                mock.patch("builtins.print"):
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [LabelDefinition("bug", "a bug")],
+                "anthropic",
+                False,
+                input_fn=inputs,
+            )
+
+        add_mock.assert_not_called()
+        s.assert_called_once()
+
+    def test_dry_run_skips_api_calls(self):
+        item = make_item(1, "One")
+        suggestion = LabelSuggestion(
+            add_labels=["bug"], remove_labels=[], reason="r"
+        )
+        result = SuggestionResult(item=item, label_suggestion=suggestion)
+        answers = iter(["1", "y", "q"])
+
+        with mock.patch("ai_labelling.workflow.print_changes_summary") as s, \
+                mock.patch("ai_labelling.workflow.print_item_details"), \
+                mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch.object(
+                    self.workflow.github_client, "get_item", return_value=item
+                ), \
+                mock.patch.object(
+                    self.workflow,
+                    "build_suggestion_result_with_retry",
+                    return_value=result,
+                ), \
+                mock.patch.object(
+                    self.workflow, "add_labels_with_retry"
+                ) as add_mock, \
+                mock.patch("builtins.print"):
+            self.workflow.run_interactive_mode(
+                "owner/repo",
+                [LabelDefinition("bug", "a bug")],
+                "anthropic",
+                False,
+                dry_run=True,
+                input_fn=lambda _: next(answers),
+            )
+
+        add_mock.assert_not_called()
+        summary_call_args = s.call_args
+        summary_results = summary_call_args.args[0]
+        self.assertEqual(len(summary_results), 1)

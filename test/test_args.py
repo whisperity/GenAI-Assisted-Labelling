@@ -2,7 +2,10 @@
 # pylint: disable=missing-function-docstring
 
 import argparse
+import io
+import re
 import unittest
+from contextlib import redirect_stderr
 from unittest import mock
 from datetime import datetime, timezone
 
@@ -95,11 +98,11 @@ class ParserDefaultsTests(unittest.TestCase):
         self.assertEqual(args.id, 42)
 
     def test_id_flag_rejects_zero(self):
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
             build_argument_parser().parse_args(["--id", "0"])
 
     def test_id_flag_rejects_negative(self):
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
             build_argument_parser().parse_args(["--id", "-1"])
 
     def test_help_mentions_id_flag(self):
@@ -254,7 +257,8 @@ class HelpEpilogTests(unittest.TestCase):
     """Check the extra ``--help`` epilog content."""
 
     def test_help_epilog_describes_debug_levels_and_ai_providers(self):
-        help_text = build_argument_parser().format_help()
+        _ansi = re.compile(r"\x1b\[[0-9;]*m")
+        help_text = _ansi.sub("", build_argument_parser().format_help())
         self.assertIn(
             "DEBUG=1: show executed subprocess command lines",
             help_text,
