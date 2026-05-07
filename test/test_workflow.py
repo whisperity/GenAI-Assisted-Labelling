@@ -13,6 +13,7 @@ from ai_labelling.models import (
     LabelDefinition,
     LabelSuggestion,
     SuggestionResult,
+    UserQuit,
 )
 from ai_labelling.workflow import LabellingWorkflow
 
@@ -94,12 +95,9 @@ class WorkflowTests(  # pylint: disable=too-many-public-methods
                 input_fn=lambda _: next(answers),
             )
 
-        self.assertEqual(add_mock.call_count, 2)
+        self.assertEqual(add_mock.call_count, 1)
         self.assertEqual(remove_mock.call_count, 0)
-        self.assertEqual(
-            [call.args[2] for call in add_mock.call_args_list],
-            [["bug"], ["docs"]],
-        )
+        self.assertEqual(add_mock.call_args.args[2], ["bug", "docs"])
 
     def test_review_and_apply_suggestions_force_removes_labels_too(self):
         suggestion_results = [
@@ -195,6 +193,76 @@ class WorkflowTests(  # pylint: disable=too-many-public-methods
 
         self.assertEqual(add_mock.call_count, 1)
         self.assertEqual(add_mock.call_args.args[2], ["b"])
+
+    def test_review_quit_during_collection_aborts_without_api_calls(self):
+        """``q`` during collection raises UserQuit and fires no API calls."""
+
+        item = make_item(1, "One")
+        suggestion_results = [
+            SuggestionResult(
+                item=item,
+                label_suggestion=LabelSuggestion(
+                    add_labels=["bug", "docs"],
+                    remove_labels=[],
+                    reason="r",
+                ),
+            )
+        ]
+        # User accepts "bug", quits at "docs" — no API call should fire.
+        answers = iter(["y", "q"])
+
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "add_labels_with_retry"
+                ) as add_mock, \
+                mock.patch.object(
+                    self.workflow, "remove_label_with_retry"
+                ) as remove_mock, \
+                mock.patch.object(
+                    self.workflow, "set_issue_type_with_retry"
+                ) as type_mock:
+            with self.assertRaises(UserQuit):
+                self.workflow.review_and_apply_suggestions(
+                    "owner/repo",
+                    suggestion_results,
+                    False,
+                    True,
+                    input_fn=lambda _: next(answers),
+                )
+
+        add_mock.assert_not_called()
+        remove_mock.assert_not_called()
+        type_mock.assert_not_called()
+
+    def test_review_batches_label_adds_into_single_api_call(self):
+        """All accepted adds for one item go in one ``add_labels`` call."""
+
+        suggestion_results = [
+            SuggestionResult(
+                item=make_item(1, "One"),
+                label_suggestion=LabelSuggestion(
+                    add_labels=["a", "b", "c"],
+                    remove_labels=[],
+                    reason="r",
+                ),
+            )
+        ]
+
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "add_labels_with_retry"
+                ) as add_mock:
+            self.workflow.review_and_apply_suggestions(
+                "owner/repo",
+                suggestion_results,
+                True,
+                False,
+            )
+
+        add_mock.assert_called_once()
+        self.assertEqual(add_mock.call_args.args[2], ["a", "b", "c"])
 
     def test_run_ai_batch_returns_empty_for_empty_input(self):
         self.assertEqual(

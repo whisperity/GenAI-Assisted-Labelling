@@ -96,8 +96,11 @@ end of the run.
 5. The model returns a JSON object with `add_labels`, optional
    `remove_labels`, optional `issue_type`, and a short `reason`. Labels not in
    the valid list are dropped silently.
-6. You confirm each suggested change individually (or batch-accept with `a`).
-7. Confirmed changes are applied through `gh api`.
+6. For each item you confirm every suggested change individually (or
+   batch-accept with `a`). All decisions for the item are collected first.
+7. Once collection for the item finishes, confirmed changes are applied
+   through `gh api` in a batch (label additions go in one request);
+   quitting mid-collection leaves the item untouched.
 
 ## Repository selection
 
@@ -311,19 +314,26 @@ Handle ISSUE #123 with AI? [y/n/a/d/q/?]
 **Label / issue-type apply** (after the AI returns suggestions):
 
 ```
+SET issue type to "Bug" for issue #123? [y/n/q/?]
 ADD the label "performance" to issue #123? [y/n/a/d/q/?]
 **REMOVE** the label "needs-triage" from issue #123? [y/n/a/d/q/?]
-SET issue type to "Bug" for issue #123? [y/n/q/?]
 ```
 
-| Key | Meaning                                                            |
-|-----|--------------------------------------------------------------------|
-| `y` | Apply this change.                                                 |
-| `n` | Skip this change.                                                  |
-| `a` | Apply this change and all remaining changes in the current bucket. |
-| `d` | Stop prompting for this bucket; skip the rest.                     |
-| `q` | Quit immediately.                                                  |
-| `?` | Print the help legend.                                             |
+| Key | Meaning                                                              |
+|-----|----------------------------------------------------------------------|
+| `y` | Approve this change.                                                 |
+| `n` | Skip this change.                                                    |
+| `a` | Approve this change and all remaining changes in the current bucket. |
+| `d` | Stop prompting for this bucket; skip the rest.                       |
+| `q` | Quit immediately.                                                    |
+| `?` | Print the help legend.                                               |
+
+All decisions for one item (issue type, additions, removals) are collected
+**before** any GitHub API call fires. Approved label additions are sent in
+a single `POST /repos/{owner}/{repo}/issues/{number}/labels` request;
+removals run as one `DELETE` per label (GitHub has no batch-remove
+endpoint). This means a `q` (quit) part-way through prompting an item
+aborts the whole item cleanly — no partial label state is ever written.
 
 `q` raises `UserQuit` everywhere, terminating the run with exit code `0`.
 

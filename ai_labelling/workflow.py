@@ -507,46 +507,67 @@ class LabellingWorkflow:
     ) -> tuple:
         """Apply suggestions for one result; return ``(adds, removes, type)``.
 
-        ``type`` is the canonical issue-type name when accepted, else ``None``.
+        Decisions are collected up-front for the entire item before any
+        GitHub API call fires. A ``q`` (quit) at any prompt aborts the
+        whole item with no partial changes.
+
+        ``type`` is the canonical issue-type name when accepted, else
+        ``None``.
         """
 
-        applied_issue_type = self._maybe_apply_issue_type(
-            repo,
+        accepted_type = self._collect_issue_type_decision(
             result,
             issue_type_map=issue_type_map,
             force=force,
             input_fn=input_fn,
         )
-        applied_add = self._apply_label_change_bucket(
-            repo,
+        accepted_adds = self._collect_label_decisions(
             result.item,
             result.label_suggestion.add_labels,
             removal=False,
             force=force,
             input_fn=input_fn,
         )
-        applied_remove: List[str] = []
+        accepted_removes: List[str] = []
         if allow_label_removals:
-            applied_remove = self._apply_label_change_bucket(
-                repo,
+            accepted_removes = self._collect_label_decisions(
                 result.item,
                 result.label_suggestion.remove_labels,
                 removal=True,
                 force=force,
                 input_fn=input_fn,
             )
-        return applied_add, applied_remove, applied_issue_type
 
-    def _maybe_apply_issue_type(
+        applied_issue_type: Optional[str] = None
+        if accepted_type is not None:
+            self.set_issue_type_with_retry(
+                repo, result.item, accepted_type, input_fn=input_fn,
+            )
+            applied_issue_type = accepted_type.name
+
+        if accepted_adds:
+            self.add_labels_with_retry(
+                repo, result.item, accepted_adds, input_fn=input_fn,
+            )
+
+        applied_remove: List[str] = []
+        for label in accepted_removes:
+            self.remove_label_with_retry(
+                repo, result.item, label, input_fn=input_fn,
+            )
+            applied_remove.append(label)
+
+        return list(accepted_adds), applied_remove, applied_issue_type
+
+    def _collect_issue_type_decision(
         self,
-        repo: str,
         result: SuggestionResult,
         *,
         issue_type_map: dict,
         force: bool,
         input_fn: Callable[[str], str],
-    ) -> Optional[str]:
-        """Apply the suggested issue type if accepted; return its name."""
+    ) -> Optional[IssueTypeDefinition]:
+        """Prompt for the issue-type decision; return the type-def or None."""
 
         suggested = result.label_suggestion.issue_type
         if result.item.kind != "issue" or suggested is None:
@@ -555,29 +576,21 @@ class LabellingWorkflow:
         if type_def is None:
             return None
 
-        should_set = force
-        if not should_set:
-            answer = prompt_confirmation(
-                (
-                    f'SET issue type to "{suggested}" '
-                    f'for issue #{result.item.number}? [y/n/q/?] '
-                ),
-                allow_apply_all=False,
-                input_fn=input_fn,
-            )
-            should_set = answer == "Y"
-        if not should_set:
-            return None
-
-        self.set_issue_type_with_retry(
-            repo, result.item, type_def, input_fn=input_fn,
+        if force:
+            return type_def
+        answer = prompt_confirmation(
+            (
+                f'SET issue type to "{suggested}" '
+                f'for issue #{result.item.number}? [y/n/q/?] '
+            ),
+            allow_apply_all=False,
+            input_fn=input_fn,
         )
-        return suggested
+        return type_def if answer == "Y" else None
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments
-    def _apply_label_change_bucket(
+    def _collect_label_decisions(
         self,
-        repo: str,
         item: WorkItem,
         labels: Sequence[str],
         *,
@@ -585,13 +598,13 @@ class LabellingWorkflow:
         force: bool,
         input_fn: Callable[[str], str],
     ) -> List[str]:
-        """Apply or skip one bucket of label changes with prompting."""
+        """Prompt user for each label; return the accepted-label list."""
 
         if not labels:
             return []
 
-        applied: List[str] = []
-        apply_remaining = force
+        accepted: List[str] = []
+        accept_remaining = force
         kind_display = "issue" if item.kind == "issue" else "PR"
         prompt_template = (
             '**REMOVE** the label "{label}" from {kind} #{number}? '
@@ -602,38 +615,27 @@ class LabellingWorkflow:
         )
 
         for label in labels:
-            should_apply = apply_remaining
-            if not should_apply:
-                answer = prompt_confirmation(
-                    prompt_template.format(
-                        label=label,
-                        kind=kind_display,
-                        number=item.number,
-                    ),
-                    allow_apply_all=True,
-                    input_fn=input_fn,
-                )
-                if answer == "A":
-                    apply_remaining = True
-                    should_apply = True
-                elif answer == "Y":
-                    should_apply = True
-                elif answer == "D":
-                    break
-                else:  # "N"
-                    continue
-
-            if should_apply:
-                if removal:
-                    self.remove_label_with_retry(
-                        repo, item, label, input_fn=input_fn,
-                    )
-                else:
-                    self.add_labels_with_retry(
-                        repo, item, [label], input_fn=input_fn,
-                    )
-                applied.append(label)
-        return applied
+            if accept_remaining:
+                accepted.append(label)
+                continue
+            answer = prompt_confirmation(
+                prompt_template.format(
+                    label=label,
+                    kind=kind_display,
+                    number=item.number,
+                ),
+                allow_apply_all=True,
+                input_fn=input_fn,
+            )
+            if answer == "A":
+                accept_remaining = True
+                accepted.append(label)
+            elif answer == "Y":
+                accepted.append(label)
+            elif answer == "D":
+                break
+            # "N" → skip this label, continue
+        return accepted
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     def _post_comment_for_result(
