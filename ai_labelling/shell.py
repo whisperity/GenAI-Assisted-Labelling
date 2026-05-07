@@ -1,5 +1,6 @@
-"""Subprocess helpers."""
+"""Subprocess helpers and git-based version detection."""
 
+import os
 import shlex
 import subprocess
 from typing import Optional, Sequence
@@ -27,3 +28,25 @@ def run(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+
+
+def get_script_version() -> str:
+    """Return a short git SHA for the script repository, or ``unknown``."""
+
+    try:
+        result = run(
+            (
+                "git",
+                "-C",
+                os.path.dirname(os.path.abspath(__file__)),
+                "rev-parse",
+                "--short",
+                "HEAD",
+            ),
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except OSError:
+        pass
+    return "unknown"

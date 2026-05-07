@@ -1,6 +1,7 @@
 """GitHub CLI-backed client helpers."""
 
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence
@@ -11,9 +12,66 @@ from ai_labelling.models import (
     LabelDefinition,
     SearchOptions,
     WorkItem,
+    parse_github_timestamp,
 )
 from ai_labelling.shell import run
 from ai_labelling.terminal import colourise
+
+
+def _emit_completed_output(completed: subprocess.CompletedProcess) -> None:
+    """Forward a completed ``gh`` invocation's stdout/stderr to the user."""
+
+    if completed.stdout and completed.stdout.strip():
+        print(colourise(completed.stdout.strip(), "green", bold=True))
+    if completed.stderr and completed.stderr.strip():
+        print(
+            colourise(
+                completed.stderr.strip(),
+                "yellow",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+
+
+def work_item_from_search_result(
+    entry: object,
+    expected_kind: str,
+) -> WorkItem:
+    """Convert a GitHub search result payload into a ``WorkItem``."""
+
+    if not isinstance(entry, dict):
+        raise RuntimeError("unexpected issue entry payload from GitHub")
+
+    labels = []
+    for label in entry.get("labels", []):
+        if isinstance(label, dict) and "name" in label:
+            labels.append(str(label["name"]))
+
+    kind = "pr" if "pull_request" in entry else "issue"
+    if kind != expected_kind:
+        raise RuntimeError(f"expected {expected_kind}, got {kind}")
+
+    type_obj = entry.get("type")
+    issue_type = (
+        str(type_obj["name"])
+        if isinstance(type_obj, dict) and "name" in type_obj
+        else None
+    )
+
+    return WorkItem(
+        number=int(entry["number"]),
+        title=str(entry.get("title") or ""),
+        body=str(entry.get("body") or ""),
+        state=str(entry.get("state", "")),
+        labels=sorted(labels, key=str.casefold),
+        html_url=str(entry.get("html_url", "")),
+        updated_at=str(entry.get("updated_at", "")),
+        created_at=str(entry.get("created_at", "")),
+        author_login=str(entry.get("user", {}).get("login", "")),
+        kind=kind,
+        issue_type=issue_type,
+    )
 
 
 class GitHubClient:
@@ -41,7 +99,6 @@ class GitHubClient:
             )
             if completed.returncode != 0:
                 continue
-
             repo = self.parse_repo_from_remote(completed.stdout.strip())
             if repo:
                 return repo
@@ -55,15 +112,17 @@ class GitHubClient:
     def parse_repo_from_remote(remote_url: str) -> Optional[str]:
         """Extract an ``owner/repository`` pair from a supported remote."""
 
+        prefixes = (
+            "git@github.com:",
+            "github.com:",
+            "https://github.com/",
+            "http://github.com/",
+        )
         normalised = remote_url
-        if normalised.startswith("git@github.com:"):
-            normalised = normalised[len("git@github.com:"):]
-        elif normalised.startswith("github.com:"):
-            normalised = normalised[len("github.com:"):]
-        elif normalised.startswith("https://github.com/"):
-            normalised = normalised[len("https://github.com/"):]
-        elif normalised.startswith("http://github.com/"):
-            normalised = normalised[len("http://github.com/"):]
+        for prefix in prefixes:
+            if normalised.startswith(prefix):
+                normalised = normalised[len(prefix):]
+                break
         else:
             return None
 
@@ -161,11 +220,9 @@ class GitHubClient:
 
             if not isinstance(payload, dict):
                 raise RuntimeError("unexpected search payload from GitHub")
-
             raw_items = payload.get("items", [])
             if not isinstance(raw_items, list):
                 raise RuntimeError("unexpected items payload from GitHub")
-
             if not raw_items:
                 break
 
@@ -221,7 +278,7 @@ class GitHubClient:
         if not labels:
             return
 
-        args: List[str] = [
+        argv: List[str] = [
             "gh",
             "api",
             "--method",
@@ -229,44 +286,24 @@ class GitHubClient:
             f"repos/{repo}/issues/{item.number}/labels",
         ]
         for label in labels:
-            args.extend(["-f", f"labels[]={label}"])
+            argv.extend(["-f", f"labels[]={label}"])
 
-        completed = run(tuple(args))
-        if completed.stdout.strip():
-            print(colourise(completed.stdout.strip(), "green", bold=True))
-        if completed.stderr.strip():
-            print(
-                colourise(
-                    completed.stderr.strip(),
-                    "yellow",
-                    stream=sys.stderr,
-                ),
-                file=sys.stderr,
-            )
+        _emit_completed_output(run(tuple(argv)))
 
     def remove_label(self, repo: str, item: WorkItem, label: str) -> None:
         """Remove one label through ``gh``."""
 
-        completed = run(
-            (
-                "gh",
-                "api",
-                "--method",
-                "DELETE",
-                f"repos/{repo}/issues/{item.number}/labels/{label}",
+        _emit_completed_output(
+            run(
+                (
+                    "gh",
+                    "api",
+                    "--method",
+                    "DELETE",
+                    f"repos/{repo}/issues/{item.number}/labels/{label}",
+                )
             )
         )
-        if completed.stdout.strip():
-            print(colourise(completed.stdout.strip(), "green", bold=True))
-        if completed.stderr.strip():
-            print(
-                colourise(
-                    completed.stderr.strip(),
-                    "yellow",
-                    stream=sys.stderr,
-                ),
-                file=sys.stderr,
-            )
 
     def list_issue_types(self, repo: str) -> List[IssueTypeDefinition]:
         """Fetch issue types for the repository's organisation."""
@@ -312,29 +349,20 @@ class GitHubClient:
             body = json.dumps({"type": {"id": issue_type.type_id}})
         else:
             body = json.dumps({"type": {"name": issue_type.name}})
-        completed = run(
-            (
-                "gh",
-                "api",
-                "--method",
-                "PATCH",
-                f"repos/{repo}/issues/{item.number}",
-                "--input",
-                "-",
-            ),
-            input_text=body,
-        )
-        if completed.stdout.strip():
-            print(colourise(completed.stdout.strip(), "green", bold=True))
-        if completed.stderr.strip():
-            print(
-                colourise(
-                    completed.stderr.strip(),
-                    "yellow",
-                    stream=sys.stderr,
+        _emit_completed_output(
+            run(
+                (
+                    "gh",
+                    "api",
+                    "--method",
+                    "PATCH",
+                    f"repos/{repo}/issues/{item.number}",
+                    "--input",
+                    "-",
                 ),
-                file=sys.stderr,
+                input_text=body,
             )
+        )
 
     def post_comment(self, repo: str, item: WorkItem, body: str) -> None:
         """Post a comment on an issue or pull request through ``gh``."""
@@ -362,7 +390,7 @@ class GitHubClient:
                 ),
                 file=sys.stderr,
             )
-            if completed.stderr.strip():
+            if completed.stderr and completed.stderr.strip():
                 print(
                     colourise(
                         completed.stderr.strip(),
@@ -371,50 +399,3 @@ class GitHubClient:
                     ),
                     file=sys.stderr,
                 )
-
-
-def parse_github_timestamp(timestamp: str) -> datetime:
-    """Parse a GitHub API timestamp into a timezone-aware ``datetime``."""
-
-    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-
-
-def work_item_from_search_result(
-    entry: object,
-    expected_kind: str,
-) -> WorkItem:
-    """Convert a GitHub search result payload into a ``WorkItem``."""
-
-    if not isinstance(entry, dict):
-        raise RuntimeError("unexpected issue entry payload from GitHub")
-
-    labels = []
-    for label in entry.get("labels", []):
-        if isinstance(label, dict) and "name" in label:
-            labels.append(str(label["name"]))
-
-    is_pr = "pull_request" in entry
-    kind = "pr" if is_pr else "issue"
-    if kind != expected_kind:
-        raise RuntimeError(f"expected {expected_kind}, got {kind}")
-
-    type_obj = entry.get("type")
-    issue_type = (
-        str(type_obj["name"])
-        if isinstance(type_obj, dict) and "name" in type_obj
-        else None
-    )
-
-    return WorkItem(
-        number=int(entry["number"]),
-        title=str(entry.get("title") or ""),
-        body=str(entry.get("body") or ""),
-        state=str(entry.get("state", "")),
-        labels=sorted(labels, key=str.casefold),
-        html_url=str(entry.get("html_url", "")),
-        updated_at=str(entry.get("updated_at", "")),
-        created_at=str(entry.get("created_at", "")),
-        author_login=str(entry.get("user", {}).get("login", "")),
-        kind=kind,
-        issue_type=issue_type,
-    )

@@ -1,174 +1,39 @@
-"""Workflow and interaction logic for label suggestion runs."""
+"""Workflow coordinator for label suggestion runs."""
 
 import argparse
 import concurrent.futures
 import os
 import sys
 import time as time_module
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 from ai_labelling.args import default_cutoff, parse_model_spec
 from ai_labelling.backends import get_backend_for_provider
+from ai_labelling.comment import format_comment_body
 from ai_labelling.config import (
     DEFAULT_DATE_CUTOFF,
     FORCE_WARNING_DELAY_SECONDS,
 )
 from ai_labelling.formatting import (
-    format_comment_body,
     format_label_block,
     format_reason,
     print_changes_summary,
     print_exception_diagnostics,
     print_item_details,
-    print_prompt_help,
 )
-from ai_labelling.shell import run as _shell_run
-from ai_labelling.github_client import GitHubClient, parse_github_timestamp
+from ai_labelling.github_client import GitHubClient
+from ai_labelling.interaction import prompt_confirmation, prompt_yes_no
 from ai_labelling.models import (
     IssueTypeDefinition,
     LabelDefinition,
     LabelSuggestion,
     SearchOptions,
     SuggestionResult,
-    UserQuit,
     WorkItem,
+    parse_github_timestamp,
 )
+from ai_labelling.shell import get_script_version
 from ai_labelling.terminal import colourise, get_debug_level
-
-
-def prompt_confirmation(
-    prompt: str,
-    *,
-    allow_apply_all: bool,
-    input_fn: Callable[[str], str] = input,
-) -> str:
-    """Prompt until the user answers with a supported git-style choice."""
-
-    while True:
-        answer = input_fn(colourise(prompt, "yellow", bold=True)).strip()
-        if not answer:
-            continue
-        normalised = answer.upper()
-        if normalised == "?":
-            print_prompt_help(allow_apply_all)
-            continue
-        if normalised == "Q":
-            raise UserQuit
-        if normalised in {"Y", "N", "A", "D"}:
-            return normalised
-
-
-def prompt_yes_no(
-    prompt: str,
-    *,
-    default_yes: bool,
-    input_fn: Callable[[str], str] = input,
-) -> bool:
-    """Prompt for a yes/no retry decision with an optional default answer."""
-
-    suffix = "[Y/n] " if default_yes else "[y/N] "
-    while True:
-        answer = input_fn(
-            colourise(prompt + suffix, "yellow", bold=True)
-        ).strip()
-        if not answer:
-            return default_yes
-        normalised = answer.casefold()
-        if normalised in {"y", "yes"}:
-            return True
-        if normalised in {"n", "no"}:
-            return False
-
-
-def normalise_label_list(
-    value: object,
-    valid_labels: Dict[str, str],
-) -> List[str]:
-    """Normalise a raw label list to unique canonical repository labels."""
-
-    if not isinstance(value, list):
-        return []
-
-    labels: List[str] = []
-    seen = set()
-    for entry in value:
-        if not isinstance(entry, str):
-            continue
-        canonical = valid_labels.get(entry.casefold())
-        if canonical is None or canonical.casefold() in seen:
-            continue
-        seen.add(canonical.casefold())
-        labels.append(canonical)
-    return sorted(labels, key=str.casefold)
-
-
-def _get_script_version() -> str:
-    """Return a short git SHA for the script repository, or 'unknown'."""
-
-    try:
-        result = _shell_run(
-            (
-                "git",
-                "-C",
-                os.path.dirname(__file__),
-                "rev-parse",
-                "--short",
-                "HEAD",
-            ),
-            check=False,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
-    return "unknown"
-
-
-# pylint: disable=too-many-locals
-def normalise_label_suggestions(
-    suggestion: Dict[str, object],
-    valid_labels: Sequence[LabelDefinition],
-    existing_labels: Sequence[str],
-    *,
-    valid_issue_types: Sequence[IssueTypeDefinition] = (),
-    current_issue_type: Optional[str] = None,
-) -> LabelSuggestion:
-    """Filter model output down to valid label additions and removals."""
-
-    valid = {
-        label.name.casefold(): label.name for label in valid_labels
-    }
-    existing = {label.casefold(): label for label in existing_labels}
-
-    raw_add = suggestion.get("add_labels", [])
-    raw_remove = suggestion.get("remove_labels", [])
-    reason = str(suggestion.get("reason", "")).strip()
-
-    labels_to_add = normalise_label_list(raw_add, valid)
-    labels_to_remove = normalise_label_list(raw_remove, valid)
-
-    labels_to_add = [
-        label for label in labels_to_add if label.casefold() not in existing
-    ]
-    labels_to_remove = [
-        label for label in labels_to_remove if label.casefold() in existing
-    ]
-
-    issue_type: Optional[str] = None
-    if valid_issue_types:
-        raw_type = suggestion.get("issue_type")
-        if isinstance(raw_type, str) and raw_type.strip():
-            valid_type_map = {
-                t.name.casefold(): t.name for t in valid_issue_types
-            }
-            canonical = valid_type_map.get(raw_type.strip().casefold())
-            current_cf = (current_issue_type or "").casefold()
-            if canonical and canonical.casefold() != current_cf:
-                issue_type = canonical
-
-    return LabelSuggestion(
-        labels_to_add, labels_to_remove, reason, issue_type=issue_type
-    )
 
 
 class LabellingWorkflow:
@@ -176,6 +41,8 @@ class LabellingWorkflow:
 
     def __init__(self, github_client: Optional[GitHubClient] = None):
         self.github_client = github_client or GitHubClient()
+
+    # ---------------- AI suggestion generation ----------------
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     def build_suggestion_result(
@@ -204,7 +71,7 @@ class LabellingWorkflow:
         )
         return SuggestionResult(
             item=item,
-            label_suggestion=normalise_label_suggestions(
+            label_suggestion=LabelSuggestion.from_raw(
                 suggestion,
                 valid_labels,
                 item.labels,
@@ -226,30 +93,24 @@ class LabellingWorkflow:
     ) -> Optional[SuggestionResult]:
         """Run one AI suggestion, optionally retrying after failures."""
 
-        while True:
-            try:
-                return self.build_suggestion_result(
-                    item,
-                    valid_labels,
-                    model,
-                    allow_label_removals,
-                    valid_issue_types=valid_issue_types,
-                )
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                print_exception_diagnostics(
-                    exc,
-                    f"AI suggestion for {item.kind.upper()} #{item.number}",
-                )
-                should_retry = prompt_yes_no(
-                    (
-                        "Retry AI suggestion generation for "
-                        f"{item.kind.upper()} #{item.number}? "
-                    ),
-                    default_yes=False,
-                    input_fn=input_fn,
-                )
-                if not should_retry:
-                    return None
+        return _retry_until_success(
+            lambda: self.build_suggestion_result(
+                item,
+                valid_labels,
+                model,
+                allow_label_removals,
+                valid_issue_types=valid_issue_types,
+            ),
+            context=f"AI suggestion for {item.kind.upper()} #{item.number}",
+            retry_prompt=(
+                "Retry AI suggestion generation for "
+                f"{item.kind.upper()} #{item.number}? "
+            ),
+            default_yes=False,
+            input_fn=input_fn,
+        )
+
+    # ---------------- Item-write retries ----------------
 
     def add_labels_with_retry(
         self,
@@ -260,25 +121,16 @@ class LabellingWorkflow:
     ) -> None:
         """Apply labels, offering retries when the write step fails."""
 
-        while True:
-            try:
-                self.github_client.add_labels(repo, item, labels)
-                return
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                print_exception_diagnostics(
-                    exc,
-                    f"Applying labels to {item.kind.upper()} #{item.number}",
-                )
-                should_retry = prompt_yes_no(
-                    (
-                        f"Retry applying labels for {item.kind.upper()} "
-                        f"#{item.number}? "
-                    ),
-                    default_yes=True,
-                    input_fn=input_fn,
-                )
-                if not should_retry:
-                    return
+        _retry_until_success(
+            lambda: self.github_client.add_labels(repo, item, labels),
+            context=f"Applying labels to {item.kind.upper()} #{item.number}",
+            retry_prompt=(
+                f"Retry applying labels for {item.kind.upper()} "
+                f"#{item.number}? "
+            ),
+            default_yes=True,
+            input_fn=input_fn,
+        )
 
     def remove_label_with_retry(
         self,
@@ -289,28 +141,19 @@ class LabellingWorkflow:
     ) -> None:
         """Remove one label, offering retries when the write step fails."""
 
-        while True:
-            try:
-                self.github_client.remove_label(repo, item, label)
-                return
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                print_exception_diagnostics(
-                    exc,
-                    (
-                        f"Removing label {label!r} from "
-                        f"{item.kind.upper()} #{item.number}"
-                    ),
-                )
-                should_retry = prompt_yes_no(
-                    (
-                        f"Retry removing label {label!r} from "
-                        f"{item.kind.upper()} #{item.number}? "
-                    ),
-                    default_yes=True,
-                    input_fn=input_fn,
-                )
-                if not should_retry:
-                    return
+        _retry_until_success(
+            lambda: self.github_client.remove_label(repo, item, label),
+            context=(
+                f"Removing label {label!r} from "
+                f"{item.kind.upper()} #{item.number}"
+            ),
+            retry_prompt=(
+                f"Retry removing label {label!r} from "
+                f"{item.kind.upper()} #{item.number}? "
+            ),
+            default_yes=True,
+            input_fn=input_fn,
+        )
 
     def set_issue_type_with_retry(
         self,
@@ -321,28 +164,20 @@ class LabellingWorkflow:
     ) -> None:
         """Set the issue type, offering retries when the write step fails."""
 
-        while True:
-            try:
-                self.github_client.set_issue_type(repo, item, issue_type)
-                return
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                print_exception_diagnostics(
-                    exc,
-                    (
-                        f"Setting issue type {issue_type.name!r} on "
-                        f"#{item.number}"
-                    ),
-                )
-                should_retry = prompt_yes_no(
-                    (
-                        f"Retry setting issue type {issue_type.name!r} "
-                        f"on #{item.number}? "
-                    ),
-                    default_yes=True,
-                    input_fn=input_fn,
-                )
-                if not should_retry:
-                    return
+        _retry_until_success(
+            lambda: self.github_client.set_issue_type(repo, item, issue_type),
+            context=(
+                f"Setting issue type {issue_type.name!r} on #{item.number}"
+            ),
+            retry_prompt=(
+                f"Retry setting issue type {issue_type.name!r} "
+                f"on #{item.number}? "
+            ),
+            default_yes=True,
+            input_fn=input_fn,
+        )
+
+    # ---------------- High-level orchestration ----------------
 
     @staticmethod
     def warn_force_mode(
@@ -351,12 +186,15 @@ class LabellingWorkflow:
     ) -> None:
         """Warn loudly before running in fully automatic force mode."""
 
+        suffix = (
+            "and apply every suggested label automatically."
+            if not dry_run
+            else "."
+        )
         print(
             colourise(
                 "SUPER DANGEROUS: --force will send every matching item to "
-                "the AI" +
-                ("and apply every suggested label automatically."
-                 if not dry_run else "."),
+                "the AI" + suffix,
                 "red",
                 bold=True,
             )
@@ -454,21 +292,63 @@ class LabellingWorkflow:
         print()
 
         if worker_count == 1:
-            return [
-                result
-                for item in items
-                for result in [
-                    self.build_suggestion_result_with_retry(
-                        item,
-                        valid_labels,
-                        model,
-                        allow_label_removals,
-                        input_fn=input_fn,
-                        valid_issue_types=valid_issue_types,
-                    )
-                ]
-                if result is not None
-            ]
+            return self._run_ai_serially(
+                items,
+                valid_labels,
+                model,
+                allow_label_removals,
+                input_fn,
+                valid_issue_types,
+            )
+        return self._run_ai_parallel(
+            items,
+            valid_labels,
+            model,
+            allow_label_removals,
+            worker_count,
+            input_fn,
+            valid_issue_types,
+        )
+
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    def _run_ai_serially(
+        self,
+        items: Sequence[WorkItem],
+        valid_labels: Sequence[LabelDefinition],
+        model: str,
+        allow_label_removals: bool,
+        input_fn: Callable[[str], str],
+        valid_issue_types: Sequence[IssueTypeDefinition],
+    ) -> List[SuggestionResult]:
+        """Run AI suggestions sequentially for the single-worker case."""
+
+        results: List[SuggestionResult] = []
+        for item in items:
+            result = self.build_suggestion_result_with_retry(
+                item,
+                valid_labels,
+                model,
+                allow_label_removals,
+                input_fn=input_fn,
+                valid_issue_types=valid_issue_types,
+            )
+            if result is not None:
+                results.append(result)
+        return results
+
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    # pylint: disable=too-many-locals
+    def _run_ai_parallel(
+        self,
+        items: Sequence[WorkItem],
+        valid_labels: Sequence[LabelDefinition],
+        model: str,
+        allow_label_removals: bool,
+        worker_count: int,
+        input_fn: Callable[[str], str],
+        valid_issue_types: Sequence[IssueTypeDefinition],
+    ) -> List[SuggestionResult]:
+        """Run AI suggestions across a process pool, retrying on failure."""
 
         results: List[Optional[SuggestionResult]] = [None] * len(items)
         with concurrent.futures.ProcessPoolExecutor(
@@ -489,7 +369,7 @@ class LabellingWorkflow:
                 index = future_to_index[future]
                 try:
                     results[index] = future.result()
-                # pylint: disable=broad-exception-caught
+                # pylint: disable-next=broad-exception-caught
                 except Exception as exc:
                     print_exception_diagnostics(
                         exc,
@@ -499,7 +379,7 @@ class LabellingWorkflow:
                             f"#{items[index].number}"
                         ),
                     )
-                    should_retry = prompt_yes_no(
+                    if prompt_yes_no(
                         (
                             "Retry AI suggestion generation for "
                             f"{items[index].kind.upper()} "
@@ -507,8 +387,7 @@ class LabellingWorkflow:
                         ),
                         default_yes=False,
                         input_fn=input_fn,
-                    )
-                    if should_retry:
+                    ):
                         results[index] = (
                             self.build_suggestion_result_with_retry(
                                 items[index],
@@ -552,8 +431,9 @@ class LabellingWorkflow:
             print(format_reason(label_suggestion.reason))
         print()
 
-    # pylint: disable=too-many-arguments,too-many-statements
-    # pylint: disable=too-many-locals,too-many-positional-arguments
+    # ---------------- Review and apply ----------------
+
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     def review_and_apply_suggestions(
         self,
         repo: str,
@@ -569,171 +449,233 @@ class LabellingWorkflow:
         """Review AI suggestions and optionally apply label changes."""
 
         issue_type_map = {t.name.casefold(): t for t in valid_issue_types}
-
-        def apply_label_change_bucket(
-            item: WorkItem,
-            labels: Sequence[str],
-            *,
-            removal: bool,
-        ) -> List[str]:
-            if not labels:
-                return []
-
-            applied: List[str] = []
-            apply_remaining = force
-            skip_remaining = False
-            kind_display = "issue" if item.kind == "issue" else "PR"
-            prompt_template = (
-                '**REMOVE** the label "{label}" from {kind} #{number}? '
-                "[y/n/a/d/q/?] "
-                if removal
-                else 'ADD the label "{label}" to {kind} #{number}? '
-                "[y/n/a/d/q/?] "
-            )
-
-            for label in labels:
-                if skip_remaining:
-                    break
-
-                should_apply = apply_remaining
-                if not should_apply:
-                    answer = prompt_confirmation(
-                        prompt_template.format(
-                            label=label,
-                            kind=kind_display,
-                            number=item.number,
-                        ),
-                        allow_apply_all=True,
-                        input_fn=input_fn,
-                    )
-                    if answer == "A":
-                        apply_remaining = True
-                        should_apply = True
-                    elif answer == "Y":
-                        should_apply = True
-                    elif answer == "D":
-                        skip_remaining = True
-                        continue
-                    elif answer == "N":
-                        continue
-
-                if should_apply:
-                    if removal:
-                        self.remove_label_with_retry(
-                            repo,
-                            item,
-                            label,
-                            input_fn=input_fn,
-                        )
-                    else:
-                        self.add_labels_with_retry(
-                            repo,
-                            item,
-                            [label],
-                            input_fn=input_fn,
-                        )
-                    applied.append(label)
-
-            return applied
-
-        version = _get_script_version() if comment_reason else ""
+        version = get_script_version() if comment_reason else ""
         summary_results: List[SuggestionResult] = []
+
         for result in suggestion_results:
             self.print_summary(result.item, result.label_suggestion)
             if dry_run:
                 summary_results.append(result)
-            else:
-                applied_issue_type: Optional[str] = None
-                suggested_type = result.label_suggestion.issue_type
-                if (
-                    result.item.kind == "issue"
-                    and suggested_type is not None
-                ):
-                    type_def = issue_type_map.get(
-                        suggested_type.casefold()
-                    )
-                    if type_def is not None:
-                        should_set = force
-                        if not should_set:
-                            answer = prompt_confirmation(
-                                (
-                                    f'SET issue type to '
-                                    f'"{suggested_type}" '
-                                    f'for issue '
-                                    f'#{result.item.number}? '
-                                    "[y/n/q/?] "
-                                ),
-                                allow_apply_all=False,
-                                input_fn=input_fn,
-                            )
-                            should_set = answer == "Y"
-                        if should_set:
-                            self.set_issue_type_with_retry(
-                                repo,
-                                result.item,
-                                type_def,
-                                input_fn=input_fn,
-                            )
-                            applied_issue_type = suggested_type
+                continue
 
-                applied_add = apply_label_change_bucket(
-                    result.item,
-                    result.label_suggestion.add_labels,
-                    removal=False,
+            applied = self._apply_one_result(
+                repo,
+                result,
+                force=force,
+                allow_label_removals=allow_label_removals,
+                issue_type_map=issue_type_map,
+                input_fn=input_fn,
+            )
+            if any(applied):
+                summary_results.append(
+                    SuggestionResult(
+                        item=result.item,
+                        label_suggestion=LabelSuggestion(
+                            applied[0],  # add
+                            applied[1],  # remove
+                            result.label_suggestion.reason,
+                            issue_type=applied[2],
+                        ),
+                        model=result.model,
+                    )
                 )
-                applied_remove: List[str] = []
-                if allow_label_removals:
-                    applied_remove = apply_label_change_bucket(
-                        result.item,
-                        result.label_suggestion.remove_labels,
-                        removal=True,
-                    )
-                if applied_add or applied_remove or applied_issue_type:
-                    summary_results.append(
-                        SuggestionResult(
-                            item=result.item,
-                            label_suggestion=LabelSuggestion(
-                                applied_add,
-                                applied_remove,
-                                result.label_suggestion.reason,
-                                issue_type=applied_issue_type,
-                            ),
-                            model=result.model,
-                        )
-                    )
-                if comment_reason:
-                    body = format_comment_body(
-                        result.label_suggestion,
-                        applied_add,
-                        applied_remove,
-                        result.model,
-                        version,
-                        allow_label_removals,
-                        applied_issue_type=applied_issue_type,
-                    )
-                    if get_debug_level() >= 2:
-                        print(
-                            f"# Comment for "
-                            f"{result.item.kind.upper()} "
-                            f"#{result.item.number}:\n{body}",
-                            file=sys.stderr,
-                        )
-                    try:
-                        self.github_client.post_comment(
-                            repo, result.item, body
-                        )
-                    # pylint: disable=broad-exception-caught
-                    except Exception as exc:
-                        print_exception_diagnostics(
-                            exc,
-                            f"Posting comment on "
-                            f"{result.item.kind.upper()} "
-                            f"#{result.item.number}",
-                        )
+            if comment_reason:
+                self._post_comment_for_result(
+                    repo,
+                    result,
+                    applied_add=applied[0],
+                    applied_remove=applied[1],
+                    applied_issue_type=applied[2],
+                    version=version,
+                    allow_label_removals=allow_label_removals,
+                )
 
         print_changes_summary(
             summary_results, allow_label_removals, dry_run=dry_run
         )
+
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    def _apply_one_result(
+        self,
+        repo: str,
+        result: SuggestionResult,
+        *,
+        force: bool,
+        allow_label_removals: bool,
+        issue_type_map: dict,
+        input_fn: Callable[[str], str],
+    ) -> tuple:
+        """Apply suggestions for one result; return ``(adds, removes, type)``.
+
+        ``type`` is the canonical issue-type name when accepted, else ``None``.
+        """
+
+        applied_issue_type = self._maybe_apply_issue_type(
+            repo,
+            result,
+            issue_type_map=issue_type_map,
+            force=force,
+            input_fn=input_fn,
+        )
+        applied_add = self._apply_label_change_bucket(
+            repo,
+            result.item,
+            result.label_suggestion.add_labels,
+            removal=False,
+            force=force,
+            input_fn=input_fn,
+        )
+        applied_remove: List[str] = []
+        if allow_label_removals:
+            applied_remove = self._apply_label_change_bucket(
+                repo,
+                result.item,
+                result.label_suggestion.remove_labels,
+                removal=True,
+                force=force,
+                input_fn=input_fn,
+            )
+        return applied_add, applied_remove, applied_issue_type
+
+    def _maybe_apply_issue_type(
+        self,
+        repo: str,
+        result: SuggestionResult,
+        *,
+        issue_type_map: dict,
+        force: bool,
+        input_fn: Callable[[str], str],
+    ) -> Optional[str]:
+        """Apply the suggested issue type if accepted; return its name."""
+
+        suggested = result.label_suggestion.issue_type
+        if result.item.kind != "issue" or suggested is None:
+            return None
+        type_def = issue_type_map.get(suggested.casefold())
+        if type_def is None:
+            return None
+
+        should_set = force
+        if not should_set:
+            answer = prompt_confirmation(
+                (
+                    f'SET issue type to "{suggested}" '
+                    f'for issue #{result.item.number}? [y/n/q/?] '
+                ),
+                allow_apply_all=False,
+                input_fn=input_fn,
+            )
+            should_set = answer == "Y"
+        if not should_set:
+            return None
+
+        self.set_issue_type_with_retry(
+            repo, result.item, type_def, input_fn=input_fn,
+        )
+        return suggested
+
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    def _apply_label_change_bucket(
+        self,
+        repo: str,
+        item: WorkItem,
+        labels: Sequence[str],
+        *,
+        removal: bool,
+        force: bool,
+        input_fn: Callable[[str], str],
+    ) -> List[str]:
+        """Apply or skip one bucket of label changes with prompting."""
+
+        if not labels:
+            return []
+
+        applied: List[str] = []
+        apply_remaining = force
+        kind_display = "issue" if item.kind == "issue" else "PR"
+        prompt_template = (
+            '**REMOVE** the label "{label}" from {kind} #{number}? '
+            "[y/n/a/d/q/?] "
+            if removal
+            else 'ADD the label "{label}" to {kind} #{number}? '
+            "[y/n/a/d/q/?] "
+        )
+
+        for label in labels:
+            should_apply = apply_remaining
+            if not should_apply:
+                answer = prompt_confirmation(
+                    prompt_template.format(
+                        label=label,
+                        kind=kind_display,
+                        number=item.number,
+                    ),
+                    allow_apply_all=True,
+                    input_fn=input_fn,
+                )
+                if answer == "A":
+                    apply_remaining = True
+                    should_apply = True
+                elif answer == "Y":
+                    should_apply = True
+                elif answer == "D":
+                    break
+                else:  # "N"
+                    continue
+
+            if should_apply:
+                if removal:
+                    self.remove_label_with_retry(
+                        repo, item, label, input_fn=input_fn,
+                    )
+                else:
+                    self.add_labels_with_retry(
+                        repo, item, [label], input_fn=input_fn,
+                    )
+                applied.append(label)
+        return applied
+
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    def _post_comment_for_result(
+        self,
+        repo: str,
+        result: SuggestionResult,
+        *,
+        applied_add: Sequence[str],
+        applied_remove: Sequence[str],
+        applied_issue_type: Optional[str],
+        version: str,
+        allow_label_removals: bool,
+    ) -> None:
+        """Render and post the per-item summary comment, swallowing errors."""
+
+        body = format_comment_body(
+            result.label_suggestion,
+            applied_add,
+            applied_remove,
+            result.model,
+            version,
+            allow_label_removals,
+            applied_issue_type=applied_issue_type,
+        )
+        if get_debug_level() >= 2:
+            print(
+                f"# Comment for {result.item.kind.upper()} "
+                f"#{result.item.number}:\n{body}",
+                file=sys.stderr,
+            )
+        try:
+            self.github_client.post_comment(repo, result.item, body)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            print_exception_diagnostics(
+                exc,
+                (
+                    f"Posting comment on {result.item.kind.upper()} "
+                    f"#{result.item.number}"
+                ),
+            )
+
+    # ---------------- Item collection ----------------
 
     def collect_items(
         self,
@@ -768,14 +710,13 @@ class LabellingWorkflow:
         if args.include_issues:
             items.extend(
                 self.github_client.search_items(
-                    repo,
-                    "issue",
-                    search_options,
+                    repo, "issue", search_options,
                 )
             )
         if args.include_prs:
             remaining = (
-                None if args.limit is None else max(args.limit - len(items), 0)
+                None if args.limit is None
+                else max(args.limit - len(items), 0)
             )
             if remaining is None or remaining > 0:
                 pr_options = SearchOptions(
@@ -787,22 +728,44 @@ class LabellingWorkflow:
                 )
                 items.extend(
                     self.github_client.search_items(
-                        repo,
-                        "pr",
-                        pr_options,
+                        repo, "pr", pr_options,
                     )
                 )
 
-        if args.created:
-            items.sort(
-                key=lambda item: parse_github_timestamp(item.created_at),
-                reverse=True,
-            )
-        else:
-            items.sort(
-                key=lambda item: parse_github_timestamp(item.updated_at),
-                reverse=True,
-            )
+        timestamp_field = "created_at" if args.created else "updated_at"
+        items.sort(
+            key=lambda item: parse_github_timestamp(
+                getattr(item, timestamp_field)
+            ),
+            reverse=True,
+        )
         if args.limit is not None:
             return items[: args.limit]
         return items
+
+
+def _retry_until_success(
+    operation: Callable[[], object],
+    *,
+    context: str,
+    retry_prompt: str,
+    default_yes: bool,
+    input_fn: Callable[[str], str],
+):
+    """Run ``operation`` and prompt for retry on failure until success/decline.
+
+    Returns the operation's last result (None when the user declines a retry
+    after a failure).
+    """
+
+    while True:
+        try:
+            return operation()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            print_exception_diagnostics(exc, context)
+            if not prompt_yes_no(
+                retry_prompt,
+                default_yes=default_yes,
+                input_fn=input_fn,
+            ):
+                return None

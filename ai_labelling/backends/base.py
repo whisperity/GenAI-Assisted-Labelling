@@ -44,6 +44,16 @@ class AIBackend:
             raise RuntimeError(
                 f"{self.name} returned a non-object response"
             )
+        if not isinstance(result.get("add_labels"), list):
+            raise RuntimeError(
+                f"{self.name} returned a response without a valid "
+                f"'add_labels' list: {result!r}"
+            )
+        if not isinstance(result.get("reason"), str):
+            raise RuntimeError(
+                f"{self.name} returned a response without a valid "
+                f"'reason' string: {result!r}"
+            )
         return result
 
     def build_prompt(
@@ -89,12 +99,19 @@ Choose labels only from the provided valid label list.
 Base your decision only on the title and main body text of the {item.kind}.
 Do not use comments, code, linked changes, or any outside context.
 
-Return JSON with:
-- add_labels: labels that should be present but are currently missing
-{removal_lines}{issue_type_lines}- reason: short explanation
+Respond with ONLY a single JSON object. No prose, no markdown fences, no
+explanation outside the JSON. Your entire response must be valid JSON.
+
+The JSON object must contain exactly these fields:
+- "add_labels": array of label name strings that should be present but
+  are currently missing (use [] if none)
+{removal_lines}{issue_type_lines}- "reason": required non-empty explanation
 
 If the title and body do not support {confidence_action} labels confidently,
-return empty lists.
+return empty lists but still include a non-empty "reason".
+
+Example response shape:
+{{"add_labels": [], "reason": "explanation here"}}
 
 Issue title:
 {item.title}

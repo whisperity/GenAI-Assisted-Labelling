@@ -13,6 +13,22 @@ from ai_labelling.terminal import debug_log, format_prompt_for_debug
 from .base import AIBackend
 
 
+PROVIDER_NAME = "anthropic"
+"""Provider string used in ``PROVIDER:MODEL:REASONING`` specs."""
+
+DEFAULT_MODEL_NAME = "claude-haiku-4-5-20251001"
+"""Hard-coded Anthropic default model used when the user omits one."""
+
+REASONING_LEVELS = ("low", "medium", "high", "xhigh", "max")
+"""Reasoning-effort levels accepted by Anthropic's API."""
+
+API_URL = "https://api.anthropic.com"
+"""Base URL for Anthropic's direct API."""
+
+API_VERSION = "2023-06-01"
+"""Anthropic API version used for direct HTTP requests."""
+
+
 class AnthropicHTTPError(RuntimeError):
     """Raised when the Anthropic API returns an HTTP error response."""
 
@@ -31,22 +47,6 @@ def sanitise_headers_for_debug(headers: Dict[str, str]) -> Dict[str, str]:
     if "x-api-key" in sanitised:
         sanitised["x-api-key"] = "***REDACTED***"
     return sanitised
-
-
-PROVIDER_NAME = "anthropic"
-"""Provider string used in ``PROVIDER:MODEL:REASONING`` specs."""
-
-DEFAULT_MODEL_NAME = "claude-haiku-4-5-20251001"
-"""Hard-coded Anthropic default model used when the user omits one."""
-
-REASONING_LEVELS = ("low", "medium", "high", "xhigh", "max")
-"""Reasoning-effort levels accepted by Anthropic's API."""
-
-API_URL = "https://api.anthropic.com"
-"""Base URL for Anthropic's direct API."""
-
-API_VERSION = "2023-06-01"
-"""Anthropic API version used for direct HTTP requests."""
 
 
 @dataclass
@@ -96,7 +96,6 @@ class AnthropicBackend(AIBackend):
             raise RuntimeError(
                 "ANTHROPIC_API_KEY is not set; required for anthropic provider"
             )
-
         headers = {
             "x-api-key": api_key,
             "anthropic-version": self.api_version,
@@ -126,10 +125,9 @@ class AnthropicBackend(AIBackend):
             method=method,
         )
 
-        # Log the request for debugging
-        sanitised = sanitise_headers_for_debug(headers)
         debug_log(
-            f"+ {method} {path} (headers: {sanitised})",
+            f"+ {method} {path} "
+            f"(headers: {sanitise_headers_for_debug(headers)})",
             colour="cyan",
         )
 
@@ -145,11 +143,7 @@ class AnthropicBackend(AIBackend):
             ) from exc
 
     def get_default_model(self) -> str:
-        """Return the newest listed Anthropic model ID.
-
-        This infers "default model" as the first entry from ``GET /v1/models``
-        because Anthropic documents that the list is ordered newest-first.
-        """
+        """Return the newest listed Anthropic model ID."""
 
         payload = self.json_request("/v1/models", method="GET")
         if not isinstance(payload, dict):
@@ -176,8 +170,13 @@ class AnthropicBackend(AIBackend):
                 lines = lines[:-1]
             stripped = "\n".join(lines).strip()
 
+        obj_start = stripped.find("{")
+        if obj_start == -1:
+            raise RuntimeError(
+                f"Anthropic returned invalid JSON:\n{stripped}"
+            )
         try:
-            parsed = json.loads(stripped)
+            parsed, _ = json.JSONDecoder().raw_decode(stripped, obj_start)
         except json.JSONDecodeError as exc:
             raise RuntimeError(
                 f"Anthropic returned invalid JSON:\n{stripped}"
@@ -186,12 +185,31 @@ class AnthropicBackend(AIBackend):
             raise RuntimeError("Anthropic returned a non-object response")
         return parsed
 
+    def _send_messages_request(
+        self, body: Dict[str, object]
+    ) -> Dict[str, object]:
+        """Send /v1/messages and unwrap the JSON object payload."""
+
+        payload = self.json_request("/v1/messages", method="POST", body=body)
+        if not isinstance(payload, dict):
+            raise RuntimeError("unexpected Anthropic messages payload")
+        return payload
+
+    @staticmethod
+    def _is_effort_unsupported(exc: AnthropicHTTPError) -> bool:
+        """Return True when the API rejected an effort parameter (HTTP 400)."""
+
+        return (
+            exc.code == 400
+            and "does not support the effort parameter" in exc.body
+        )
+
     def run_prompt(
         self,
         prompt: str,
         model_spec: ModelSpec,
         *,
-        allow_label_removals: bool,
+        allow_label_removals: bool,  # pylint: disable=unused-argument
     ) -> object:
         """Run a prompt through Anthropic's Messages API."""
 
@@ -209,29 +227,18 @@ class AnthropicBackend(AIBackend):
             body["output_config"] = {"effort": model_spec.reasoning_effort}
 
         try:
-            payload = self.json_request(
-                "/v1/messages", method="POST", body=body
-            )
+            payload = self._send_messages_request(body)
         except AnthropicHTTPError as exc:
-            if (
-                exc.code == 400
-                and "does not support the effort parameter" in exc.body
-                and "output_config" in body
-            ):
+            if self._is_effort_unsupported(exc) and "output_config" in body:
                 debug_log(
                     f"Model {selected_model!r} does not support effort;"
                     " retrying without it.",
                     colour="yellow",
                 )
                 del body["output_config"]
-                payload = self.json_request(
-                    "/v1/messages", method="POST", body=body
-                )
+                payload = self._send_messages_request(body)
             else:
                 raise
-
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected Anthropic messages payload")
 
         content = payload.get("content")
         if not isinstance(content, list):

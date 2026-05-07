@@ -4,7 +4,20 @@ import os
 import sys
 from typing import List, Optional
 
-from ai_labelling.config import ANSI_RESET, ANSI_STYLES
+ANSI_RESET = "\033[0m"
+ANSI_STYLES = {
+    "blue": "\033[34m",
+    "cyan": "\033[36m",
+    "green": "\033[32m",
+    "grey": "\033[90m",
+    "magenta": "\033[35m",
+    "red": "\033[31m",
+    "reverse": "\033[7m",
+    "white": "\033[97m",
+    "yellow": "\033[33m",
+    "bold": "\033[1m",
+}
+"""ANSI escape sequences used for dependency-free terminal colouring."""
 
 
 def supports_colour(stream: object) -> bool:
@@ -58,35 +71,29 @@ def debug_log(body: str, *, colour: str = "magenta") -> None:
     )
 
 
+_PROMPT_REDACTIONS = {
+    "Issue title:": "<ISSUE TITLE OMITTED>",
+    "Existing labels:": "<LABELS OMITTED>",
+    "Valid labels:": "<LABEL DEFINITIONS OMITTED>",
+    "Main body text:": "<ISSUE BODY OMITTED>",
+}
+
+
 def sanitise_prompt_for_debug(prompt: str) -> str:
     """Replace runtime-heavy prompt sections with placeholders for DEBUG=2."""
 
-    replacements = {
-        "Issue title:\n": "Issue title:\n<ISSUE TITLE OMITTED>\n",
-        "Existing labels:\n": "Existing labels:\n<LABELS OMITTED>\n",
-        "Valid labels:\n": "Valid labels:\n<LABEL DEFINITIONS OMITTED>\n",
-        "Main body text:\n": "Main body text:\n<ISSUE BODY OMITTED>\n",
-    }
-    sanitised_lines: List[str] = []
-    skip_mode: Optional[str] = None
-    section_headers = tuple(replacements)
+    output: List[str] = []
+    skipping = False
     for line in prompt.splitlines():
-        if skip_mode is None and line + "\n" in replacements:
-            header = line + "\n"
-            sanitised_lines.append(line)
-            sanitised_lines.append(replacements[header].splitlines()[1])
-            skip_mode = header
+        replacement = _PROMPT_REDACTIONS.get(line)
+        if replacement is not None:
+            output.append(line)
+            output.append(replacement)
+            skipping = True
             continue
-        if skip_mode is not None:
-            if any(line + "\n" == header for header in section_headers):
-                header = line + "\n"
-                sanitised_lines.append(line)
-                sanitised_lines.append(replacements[header].splitlines()[1])
-                skip_mode = header
-                continue
-            continue
-        sanitised_lines.append(line)
-    return "\n".join(sanitised_lines)
+        if not skipping:
+            output.append(line)
+    return "\n".join(output)
 
 
 def format_prompt_for_debug(prompt: str) -> Optional[str]:

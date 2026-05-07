@@ -4,32 +4,25 @@ import re
 import sys
 import textwrap
 import traceback
-from datetime import datetime
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Dict, List, Sequence
 
 from ai_labelling.models import (
-    LabelSuggestion,
     PreviewBlock,
     SuggestionResult,
     WorkItem,
+    parse_github_timestamp,
 )
 from ai_labelling.terminal import colourise
 
 # Inline Markdown span patterns, matched in priority order so that ***
 # is tested before ** which is tested before bare *.
 _INLINE_MD_RE = re.compile(
-    r"\*\*\*(.+?)\*\*\*"   # bold + italic  → group 1
-    r"|\*\*(.+?)\*\*"       # bold           → group 2
-    r"|\*(.+?)\*"           # italic *       → group 3
+    r"\*\*\*(.+?)\*\*\*"      # bold + italic  → group 1
+    r"|\*\*(.+?)\*\*"         # bold           → group 2
+    r"|\*(.+?)\*"             # italic *       → group 3
     r"|(?<!\w)_(.+?)_(?!\w)"  # italic _       → group 4
-    r"|`([^`]+)`"           # inline code    → group 5
+    r"|`([^`]+)`"             # inline code    → group 5
 )
-
-
-def parse_github_timestamp(timestamp: str) -> datetime:
-    """Parse a GitHub API timestamp into a timezone-aware ``datetime``."""
-
-    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
 
 def format_display_timestamp(timestamp: str) -> str:
@@ -133,6 +126,47 @@ def summarise_body(body: str) -> str:
     return summary
 
 
+def wrap_preserving_newlines(text: str, width: int) -> List[str]:
+    """Wrap long lines without collapsing or reflowing existing line breaks."""
+
+    wrapped_lines: List[str] = []
+    for source_line in text.splitlines():
+        if not source_line.strip():
+            wrapped_lines.append("")
+            continue
+        wrapped_lines.extend(
+            textwrap.wrap(
+                source_line,
+                width=width,
+                replace_whitespace=False,
+                drop_whitespace=False,
+            )
+        )
+    return wrapped_lines
+
+
+def non_empty_lines(lines: Sequence[str]) -> List[str]:
+    """Return non-empty lines from a wrapped preview block."""
+
+    return [line for line in lines if line.strip()]
+
+
+def take_non_empty_lines(lines: Sequence[str], limit: int) -> List[str]:
+    """Take wrapped preview lines until the requested non-empty line limit."""
+
+    selected_lines: List[str] = []
+    non_empty_count = 0
+    for line in lines:
+        selected_lines.append(line)
+        if line.strip():
+            non_empty_count += 1
+        if non_empty_count >= limit:
+            break
+    while selected_lines and selected_lines[-1] == "":
+        selected_lines.pop()
+    return selected_lines
+
+
 def _identity_block_lines(
     lines: List[str], block_kind: str  # pylint: disable=unused-argument
 ) -> List[str]:
@@ -195,11 +229,7 @@ def format_body_preview(
     width: int = 72,
     max_lines: int = 8,
 ) -> str:
-    """Wrap and truncate an issue body preview for terminal display.
-
-    Markdown headings and fenced code blocks are shown in the preview but do
-    not count against the prose line budget used to stop the preview.
-    """
+    """Wrap and truncate an issue body preview for terminal display."""
 
     return _build_preview(
         body,
@@ -210,12 +240,7 @@ def format_body_preview(
 
 
 def colourise_inline_markdown(line: str) -> str:
-    """Colourise inline Markdown spans and strip their formatting markers.
-
-    Bold (``**``), italic (``*`` / ``_``), bold+italic (``***``), and
-    inline code (`````) are recognised.  Unrecognised text is rendered
-    in white so the caller does not need to set a baseline colour.
-    """
+    """Colourise inline Markdown spans and strip their formatting markers."""
 
     result: List[str] = []
     pos = 0
@@ -224,21 +249,66 @@ def colourise_inline_markdown(line: str) -> str:
         if before:
             result.append(colourise(before, "white"))
         groups = match.groups()
-        if groups[0] is not None:       # ***bold+italic***  → red
+        if groups[0] is not None:        # ***bold+italic*** → red
             result.append(colourise(groups[0], "red", bold=True))
-        elif groups[1] is not None:     # **bold**           → red
+        elif groups[1] is not None:      # **bold**          → red
             result.append(colourise(groups[1], "red", bold=True))
-        elif groups[2] is not None:     # *italic*           → yellow
+        elif groups[2] is not None:      # *italic*          → yellow
             result.append(colourise(groups[2], "yellow"))
-        elif groups[3] is not None:     # _italic_           → yellow
+        elif groups[3] is not None:      # _italic_          → yellow
             result.append(colourise(groups[3], "yellow"))
-        elif groups[4] is not None:     # `code`             → green
+        elif groups[4] is not None:      # `code`            → green
             result.append(colourise(groups[4], "green"))
         pos = match.end()
     tail = line[pos:]
     if tail:
         result.append(colourise(tail, "white"))
     return "".join(result)
+
+
+def _render_text_block_lines(lines: List[str]) -> List[str]:
+    """Render a "text" block with inline-markdown colour and setext detect."""
+
+    result: List[str] = []
+    i = 0
+    while i < len(lines):
+        current = lines[i]
+        if i + 1 < len(lines):
+            nxt = lines[i + 1].strip()
+            if (
+                nxt
+                and len(nxt) >= 2
+                and nxt[0] in "=-"
+                and all(c == nxt[0] for c in nxt)
+            ):
+                result.append(colourise(current.strip(), "reverse"))
+                i += 2
+                continue
+        if current.strip():
+            result.append(colourise_inline_markdown(current))
+        else:
+            result.append(current)
+        i += 1
+    return result
+
+
+def _render_code_block_lines(lines: List[str]) -> List[str]:
+    """Render a fenced or standalone code block, stripping fences/backticks."""
+
+    result: List[str] = []
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            continue
+        stripped = line.strip()
+        if (
+            stripped.startswith("`")
+            and stripped.endswith("`")
+            and "`" not in stripped[1:-1]
+        ):
+            result.append(stripped[1:-1])
+        else:
+            result.append(line)
+    return result
 
 
 def _render_colourised_block_lines(
@@ -253,49 +323,10 @@ def _render_colourised_block_lines(
             for line in lines
             if line.strip()
         ]
-
     if block_kind == "code":
-        result: List[str] = []
-        for line in lines:
-            if line.lstrip().startswith("```"):
-                continue  # strip fenced code delimiters
-            stripped = line.strip()
-            # Standalone code line: `` `content` `` with no inner backticks
-            if (
-                stripped.startswith("`")
-                and stripped.endswith("`")
-                and "`" not in stripped[1:-1]
-            ):
-                result.append(stripped[1:-1])
-            else:
-                result.append(line)
-        return result
-
+        return _render_code_block_lines(lines)
     if block_kind == "text":
-        result = []
-        i = 0
-        while i < len(lines):
-            current = lines[i]
-            # Detect setext-style heading: next line is all = or all -
-            if i + 1 < len(lines):
-                nxt = lines[i + 1].strip()
-                if (
-                    nxt
-                    and len(nxt) >= 2
-                    and nxt[0] in "=-"
-                    and all(c == nxt[0] for c in nxt)
-                ):
-                    result.append(colourise(current.strip(), "reverse"))
-                    i += 2
-                    continue
-            if current.strip():
-                result.append(colourise_inline_markdown(current))
-            else:
-                result.append(current)
-            i += 1
-        return result
-
-    # quote, empty, or other block types
+        return _render_text_block_lines(lines)
     return [
         colourise(line, "white") if line.strip() else line
         for line in lines
@@ -308,12 +339,7 @@ def format_body_preview_colourised(
     width: int = 72,
     max_lines: int = 8,
 ) -> str:
-    """Wrap and truncate a body preview with ANSI Markdown colouring.
-
-    Markdown formatting markers are stripped and replaced with ANSI
-    colour codes.  Headings appear reverse-video, bold red, italic yellow,
-    inline code green, and fenced code blocks in the terminal default.
-    """
+    """Wrap and truncate a body preview with ANSI Markdown colouring."""
 
     return _build_preview(
         body,
@@ -321,47 +347,6 @@ def format_body_preview_colourised(
         max_lines=max_lines,
         render_fn=_render_colourised_block_lines,
     )
-
-
-def wrap_preserving_newlines(text: str, width: int) -> List[str]:
-    """Wrap long lines without collapsing or reflowing existing line breaks."""
-
-    wrapped_lines: List[str] = []
-    for source_line in text.splitlines():
-        if not source_line.strip():
-            wrapped_lines.append("")
-            continue
-        wrapped_lines.extend(
-            textwrap.wrap(
-                source_line,
-                width=width,
-                replace_whitespace=False,
-                drop_whitespace=False,
-            )
-        )
-    return wrapped_lines
-
-
-def non_empty_lines(lines: Sequence[str]) -> List[str]:
-    """Return non-empty lines from a wrapped preview block."""
-
-    return [line for line in lines if line.strip()]
-
-
-def take_non_empty_lines(lines: Sequence[str], limit: int) -> List[str]:
-    """Take wrapped preview lines until the requested non-empty line limit."""
-
-    selected_lines: List[str] = []
-    non_empty_count = 0
-    for line in lines:
-        selected_lines.append(line)
-        if line.strip():
-            non_empty_count += 1
-        if non_empty_count >= limit:
-            break
-    while selected_lines and selected_lines[-1] == "":
-        selected_lines.pop()
-    return selected_lines
 
 
 def format_label_block(labels: Sequence[str]) -> str:
@@ -435,48 +420,6 @@ def print_matching_items(
     print()
 
 
-def print_prompt_help(allow_apply_all: bool) -> None:
-    """Print git-style help text for interactive single-character answers."""
-
-    if allow_apply_all:
-        print(colourise("y - yes, use this", "blue", bold=True))
-        print(colourise("n - no, skip this", "blue", bold=True))
-        print(
-            colourise(
-                "a - all, use this and all remaining in this action",
-                "blue",
-                bold=True,
-            )
-        )
-        print(
-            colourise(
-                "d - done, skip this and remaining labels in this action",
-                "blue",
-                bold=True,
-            )
-        )
-    else:
-        print(colourise("y - yes, handle this item", "blue", bold=True))
-        print(colourise("n - no, skip this item", "blue", bold=True))
-        print(
-            colourise(
-                "a - all, handle all remaining items",
-                "blue",
-                bold=True,
-            )
-        )
-        print(
-            colourise(
-                "d - done, stop prompting more items",
-                "blue",
-                bold=True,
-            )
-        )
-    print(colourise("q - quit, terminate program now", "blue", bold=True))
-    print(colourise("? - help, show this help", "blue", bold=True))
-    print()
-
-
 def print_exception_diagnostics(exc: Exception, context: str) -> None:
     """Print a labelled stack trace for a failed retryable operation."""
 
@@ -492,7 +435,6 @@ def describe_match_bucket(items: Sequence[WorkItem]) -> str:
 
     if not items:
         return "items"
-
     state = items[0].state.casefold()
     kind_label = "issues" if items[0].kind == "issue" else "PRs"
     return f"{state} {kind_label}"
@@ -500,10 +442,10 @@ def describe_match_bucket(items: Sequence[WorkItem]) -> str:
 
 def bucketise_items(
     items: Sequence[WorkItem],
-) -> dict[str, List[WorkItem]]:
+) -> Dict[str, List[WorkItem]]:
     """Group items by open/closed state and by issue-vs-PR kind."""
 
-    buckets: dict[str, List[WorkItem]] = {}
+    buckets: Dict[str, List[WorkItem]] = {}
     for item in items:
         state = item.state.casefold()
         kind_label = "issues" if item.kind == "issue" else "PRs"
@@ -566,7 +508,7 @@ def print_changes_summary(
         )
         if has_type:
             print(
-                "  " + colourise(f"type: {suggestion.issue_type}", "cyan")
+                "  " + colourise(f"~ {suggestion.issue_type}", "cyan")
             )
         for lbl in suggestion.add_labels:
             print("  " + colourise(f"+ {lbl}", "green"))
@@ -574,82 +516,3 @@ def print_changes_summary(
             for lbl in suggestion.remove_labels:
                 print("  " + colourise(f"- {lbl}", "magenta"))
     print()
-
-
-_REPO_URL = "http://github.com/whisperity/GenAI-Assisted-Labelling"
-
-
-# pylint: disable=too-many-arguments,too-many-branches
-# pylint: disable=too-many-positional-arguments
-def format_comment_body(
-    original_suggestion: LabelSuggestion,
-    applied_add: Sequence[str],
-    applied_remove: Sequence[str],
-    model: str,
-    version: str,
-    allow_label_removals: bool,
-    *,
-    applied_issue_type: Optional[str] = None,
-) -> str:
-    """Build the Markdown comment body for a labelling action."""
-
-    applied_add_cf = {lbl.casefold() for lbl in applied_add}
-    applied_remove_cf = {lbl.casefold() for lbl in applied_remove}
-
-    lines: List[str] = [
-        f"## [**AI-assisted labelling**]({_REPO_URL})",
-        "",
-        (f"script version [`{version}`]({_REPO_URL}/tree/{version}), "
-         f"using model: `{model}`"),
-        "",
-    ]
-
-    if original_suggestion.reason.strip():
-        lines += ["**Reasoning:**", ""]
-        for line in original_suggestion.reason.strip().splitlines():
-            lines.append(f"> {line}")
-        lines.append("")
-
-    if original_suggestion.issue_type is not None:
-        accepted = (
-            applied_issue_type is not None
-            and applied_issue_type.casefold()
-            == original_suggestion.issue_type.casefold()
-        )
-        if accepted:
-            lines.append(
-                f"**Suggested issue type:** `{original_suggestion.issue_type}`"
-            )
-        else:
-            lines.append(
-                f"**Suggested issue type:** "
-                f"~~`{original_suggestion.issue_type}`~~"
-                " (rejected by operator)"
-            )
-        lines.append("")
-
-    if original_suggestion.add_labels:
-        lines.append("**Suggested additions:**")
-        for lbl in sorted(original_suggestion.add_labels, key=str.casefold):
-            if lbl.casefold() in applied_add_cf:
-                lines.append(f"  - `{lbl}`")
-            else:
-                lines.append(f"  - ~~`{lbl}`~~ (rejected by operator)")
-        lines.append("")
-
-    if allow_label_removals and original_suggestion.remove_labels:
-        lines.append("**Suggested removals:**")
-        for lbl in sorted(
-            original_suggestion.remove_labels, key=str.casefold
-        ):
-            if lbl.casefold() in applied_remove_cf:
-                lines.append(f"  - `{lbl}`")
-            else:
-                lines.append(f"  - ~~`{lbl}`~~ (rejected by operator)")
-        lines.append("")
-
-    while lines and lines[-1] == "":
-        lines.pop()
-    lines.append("")
-
-    return "\n".join(lines)

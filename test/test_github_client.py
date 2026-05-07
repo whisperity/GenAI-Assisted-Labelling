@@ -7,13 +7,15 @@ from datetime import datetime, timezone
 from unittest import mock
 
 from test.helpers import make_item
-from ai_labelling.models import IssueTypeDefinition
 from ai_labelling.github_client import (
     GitHubClient,
-    parse_github_timestamp,
     work_item_from_search_result,
 )
-from ai_labelling.models import LabelDefinition, SearchOptions
+from ai_labelling.models import (
+    IssueTypeDefinition,
+    LabelDefinition,
+    SearchOptions,
+)
 
 
 class GitHubClientTests(  # pylint: disable=too-many-public-methods
@@ -324,10 +326,6 @@ class GitHubClientTests(  # pylint: disable=too-many-public-methods
         ]
         self.assertGreater(len(stderr_calls), 0)
 
-    def test_parse_github_timestamp_returns_aware_datetime(self):
-        parsed = parse_github_timestamp("2026-05-01T00:00:00Z")
-        self.assertEqual(parsed.tzinfo, timezone.utc)
-
     def test_json_raises_runtime_error_on_invalid_json(self):
         """gh output that is not valid JSON should surface as RuntimeError."""
 
@@ -543,3 +541,133 @@ class GitHubClientTests(  # pylint: disable=too-many-public-methods
         with mock.patch.object(self.client, "json", return_value=None):
             with self.assertRaises(RuntimeError):
                 self.client.get_item("llvm/llvm-project", 99)
+
+    def test_format_search_date_uses_utc_day(self):
+        timestamp = datetime(2026, 5, 1, 23, 45, tzinfo=timezone.utc)
+        self.assertEqual(
+            GitHubClient.format_search_date(timestamp), "2026-05-01"
+        )
+
+    def test_build_search_query_without_cutoff_omits_qualifier(self):
+        query = self.client.build_search_query(
+            "owner/repo",
+            "issue",
+            SearchOptions(True, False, False, None, None),
+        )
+        self.assertEqual(query, "repo:owner/repo is:issue is:open")
+
+    def test_add_labels_no_op_when_no_labels(self):
+        item = make_item(7, "Seven")
+        with mock.patch(
+            "ai_labelling.github_client.run"
+        ) as run_mock:
+            self.client.add_labels("owner/repo", item, [])
+        run_mock.assert_not_called()
+
+    def test_emit_completed_output_handles_empty_streams(self):
+        item = make_item(7, "Seven")
+        completed = mock.Mock(stdout="", stderr="")
+        with mock.patch(
+            "ai_labelling.github_client.run", return_value=completed
+        ), mock.patch("builtins.print") as print_mock:
+            self.client.add_labels("owner/repo", item, ["bug"])
+        print_mock.assert_not_called()
+
+    def test_search_items_paginates_until_short_page(self):
+        full_page = {
+            "items": [
+                {
+                    "number": i,
+                    "title": str(i),
+                    "body": "",
+                    "state": "open",
+                    "labels": [],
+                    "html_url": "",
+                    "updated_at": "2026-05-03T00:00:00Z",
+                    "created_at": "2026-05-03T00:00:00Z",
+                    "user": {"login": "octocat"},
+                }
+                for i in range(100)
+            ]
+        }
+        partial_page = {
+            "items": [
+                {
+                    "number": 200,
+                    "title": "Last",
+                    "body": "",
+                    "state": "open",
+                    "labels": [],
+                    "html_url": "",
+                    "updated_at": "2026-05-03T00:00:00Z",
+                    "created_at": "2026-05-03T00:00:00Z",
+                    "user": {"login": "octocat"},
+                }
+            ]
+        }
+        with mock.patch.object(
+            self.client, "json", side_effect=[full_page, partial_page]
+        ):
+            result = self.client.search_items(
+                "owner/repo",
+                "issue",
+                SearchOptions(True, False, False, None, None),
+            )
+        self.assertEqual(len(result), 101)
+
+    def test_search_items_breaks_on_empty_page(self):
+        with mock.patch.object(
+            self.client, "json", return_value={"items": []}
+        ):
+            result = self.client.search_items(
+                "owner/repo",
+                "issue",
+                SearchOptions(True, False, False, None, None),
+            )
+        self.assertEqual(result, [])
+
+    def test_list_issue_types_handles_invalid_json(self):
+        bad = mock.Mock(returncode=0, stdout="not json", stderr="")
+        with mock.patch(
+            "ai_labelling.github_client.run", return_value=bad,
+        ):
+            self.assertEqual(
+                self.client.list_issue_types("owner/repo"), []
+            )
+
+    def test_list_issue_types_rejects_non_list_payload(self):
+        bad = mock.Mock(returncode=0, stdout='{"unexpected": true}', stderr="")
+        with mock.patch(
+            "ai_labelling.github_client.run", return_value=bad,
+        ):
+            self.assertEqual(
+                self.client.list_issue_types("owner/repo"), []
+            )
+
+    def test_list_issue_types_skips_invalid_entries(self):
+        payload = '[{"id": 1, "name": "Bug"}, {"name": ""}, "wrong type"]'
+        ok = mock.Mock(returncode=0, stdout=payload, stderr="")
+        with mock.patch(
+            "ai_labelling.github_client.run", return_value=ok,
+        ):
+            result = self.client.list_issue_types("owner/repo")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].name, "Bug")
+
+    def test_parse_repo_from_remote_handles_https_form(self):
+        self.assertEqual(
+            GitHubClient.parse_repo_from_remote(
+                "https://github.com/llvm/llvm-project"
+            ),
+            "llvm/llvm-project",
+        )
+
+    def test_parse_repo_from_remote_rejects_garbage(self):
+        self.assertIsNone(
+            GitHubClient.parse_repo_from_remote("garbage://x/y")
+        )
+
+    def test_parse_repo_from_remote_rejects_owner_only(self):
+        self.assertIsNone(
+            GitHubClient.parse_repo_from_remote("git@github.com:onlyowner")
+        )

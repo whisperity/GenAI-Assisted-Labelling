@@ -1,5 +1,5 @@
 """Tests for human-facing formatting helpers."""
-# pylint: disable=missing-function-docstring
+# pylint: disable=missing-function-docstring,duplicate-code
 
 import sys
 import unittest
@@ -7,20 +7,25 @@ from unittest import mock
 
 from test.helpers import make_item
 from ai_labelling.formatting import (
+    bucketise_items,
+    classify_preview_block,
     colourise_inline_markdown,
     describe_match_bucket,
     format_body_preview,
     format_body_preview_colourised,
-    format_comment_body,
     format_display_timestamp,
     format_label_block,
     format_reason,
+    non_empty_lines,
+    parse_preview_blocks,
     print_changes_summary,
     print_exception_diagnostics,
     print_item_details,
     print_match_summary,
-    print_prompt_help,
+    print_matching_items,
     summarise_body,
+    take_non_empty_lines,
+    wrap_preserving_newlines,
 )
 from ai_labelling.models import LabelSuggestion, SuggestionResult
 
@@ -29,10 +34,7 @@ class TimestampAndBucketTests(unittest.TestCase):
     """Cover timestamp formatting and bucket description helpers."""
 
     def test_format_display_timestamp_contains_date(self):
-        """The formatted timestamp should at minimum contain the date."""
-
         result = format_display_timestamp("2026-05-01T12:30:00Z")
-        # 12:30 UTC is far from midnight so the date is stable in any tz
         self.assertIn("2026-05-01", result)
         self.assertRegex(result, r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
 
@@ -46,6 +48,70 @@ class TimestampAndBucketTests(unittest.TestCase):
     def test_describe_match_bucket_uses_pr_label(self):
         items = [make_item(1, "One", kind="pr", state="closed")]
         self.assertEqual(describe_match_bucket(items), "closed PRs")
+
+    def test_bucketise_items_groups_by_state_and_kind(self):
+        items = [
+            make_item(1, "A"),
+            make_item(2, "B", state="closed"),
+            make_item(3, "C", kind="pr"),
+        ]
+        result = bucketise_items(items)
+        self.assertIn("open issues", result)
+        self.assertIn("closed issues", result)
+        self.assertIn("open PRs", result)
+
+
+class PreviewBlockTests(unittest.TestCase):
+    """Verify markdown block parsing and classification."""
+
+    def test_classify_empty_returns_empty(self):
+        self.assertEqual(classify_preview_block(""), "empty")
+
+    def test_classify_quote_block(self):
+        self.assertEqual(
+            classify_preview_block("> warning\n> next"), "quote"
+        )
+
+    def test_classify_heading_block(self):
+        self.assertEqual(classify_preview_block("# Title"), "heading")
+
+    def test_classify_inline_code_line(self):
+        self.assertEqual(classify_preview_block("`x = 1`"), "code")
+
+    def test_classify_fenced_code_block(self):
+        self.assertEqual(classify_preview_block("```\ncode\n```"), "code")
+
+    def test_parse_preview_blocks_handles_empty_body(self):
+        blocks = parse_preview_blocks("")
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].text, "(no description)")
+
+    def test_parse_preview_blocks_separates_paragraphs(self):
+        blocks = parse_preview_blocks("First.\n\nSecond.")
+        self.assertEqual([b.text for b in blocks], ["First.", "Second."])
+
+
+class WrapAndCountTests(unittest.TestCase):
+    """Verify text-wrapping and line-counting helpers."""
+
+    def test_wrap_preserving_newlines_keeps_blank_lines(self):
+        result = wrap_preserving_newlines("a\n\nb", width=10)
+        self.assertEqual(result, ["a", "", "b"])
+
+    def test_wrap_preserving_newlines_wraps_long_line(self):
+        result = wrap_preserving_newlines("a b c d e f", width=4)
+        self.assertGreater(len(result), 1)
+
+    def test_non_empty_lines_filters_blanks(self):
+        self.assertEqual(non_empty_lines(["", "a", " ", "b"]), ["a", "b"])
+
+    def test_take_non_empty_lines_stops_at_limit(self):
+        result = take_non_empty_lines(["a", "", "b", "c"], 2)
+        self.assertEqual(result, ["a", "", "b"])
+
+    def test_take_non_empty_lines_strips_trailing_blanks(self):
+        result = take_non_empty_lines(["a", ""], 5)
+        self.assertEqual(result, ["a"])
 
 
 class PrintHelpersTests(unittest.TestCase):
@@ -63,6 +129,20 @@ class PrintHelpersTests(unittest.TestCase):
         self.assertIn("Fix the bug", printed)
         self.assertIn("#42", printed)
         self.assertIn("octocat", printed)
+
+    def test_print_matching_items_lists_titles(self):
+        items = [
+            make_item(1, "Open one"),
+            make_item(2, "Closed two", state="closed"),
+        ]
+        with mock.patch("builtins.print") as print_mock:
+            print_matching_items(items, "Heading")
+        printed = "\n".join(
+            str(c.args[0]) for c in print_mock.call_args_list if c.args
+        )
+        self.assertIn("Heading:", printed)
+        self.assertIn("Open one", printed)
+        self.assertIn("Closed two", printed)
 
     def test_print_changes_summary_dry_run_lists_add_labels(self):
         results = [
@@ -199,11 +279,30 @@ class PrintHelpersTests(unittest.TestCase):
         label_line = next(s for s in call_args if "enhancement" in s)
         self.assertTrue(label_line.startswith("  "))
 
+    def test_print_changes_summary_shows_issue_type(self):
+        results = [
+            SuggestionResult(
+                item=make_item(1, "One"),
+                label_suggestion=LabelSuggestion(
+                    add_labels=[],
+                    remove_labels=[],
+                    reason="",
+                    issue_type="Bug",
+                ),
+            )
+        ]
+        with mock.patch("builtins.print") as print_mock:
+            print_changes_summary(results, allow_label_removals=False)
+        printed = "\n".join(
+            str(c.args[0]) for c in print_mock.call_args_list if c.args
+        )
+        self.assertIn("~ Bug", printed)
+
     def test_print_exception_diagnostics_writes_context_to_stderr(self):
         exc = RuntimeError("something failed")
-        with mock.patch("builtins.print") as print_mock:
-            with mock.patch("traceback.print_exception"):
-                print_exception_diagnostics(exc, "AI suggestion")
+        with mock.patch("builtins.print") as print_mock, \
+                mock.patch("traceback.print_exception"):
+            print_exception_diagnostics(exc, "AI suggestion")
         print_mock.assert_called_once()
         self.assertIs(
             print_mock.call_args.kwargs.get("file"), sys.stderr
@@ -230,6 +329,12 @@ class FormattingTests(unittest.TestCase):
             summarise_body(body),
             "Actual first paragraph. More detail follows.",
         )
+
+    def test_summarise_body_truncates_long_text(self):
+        body = "Long sentence " * 50
+        result = summarise_body(body)
+        self.assertLessEqual(len(result), 280)
+        self.assertTrue(result.endswith("..."))
 
     def test_format_body_preview_wraps_and_truncates(self):
         body = "\n\n".join(
@@ -301,11 +406,17 @@ class FormattingTests(unittest.TestCase):
         self.assertIn("Intro line.", result)
         self.assertNotIn("Closing sentence.", result)
 
+    def test_format_label_block_handles_empty_list(self):
+        self.assertEqual(format_label_block([]), "  - (none)")
+
     def test_format_label_block_uses_bullets(self):
         self.assertEqual(
             format_label_block(["bug", "area:docs,api"]),
             "  - area:docs,api\n  - bug",
         )
+
+    def test_format_reason_returns_empty_for_blank(self):
+        self.assertEqual(format_reason("   "), "")
 
     def test_format_reason_wraps_and_indents(self):
         result = format_reason(
@@ -314,26 +425,6 @@ class FormattingTests(unittest.TestCase):
         )
         self.assertTrue(result.startswith("  This is"))
         self.assertIn("\n  ", result)
-
-    def test_print_prompt_help_supports_item_mode(self):
-        with mock.patch("builtins.print") as print_mock:
-            print_prompt_help(False)
-
-        printed = "\n".join(
-            call.args[0] for call in print_mock.call_args_list if call.args
-        )
-        self.assertIn("handle this item", printed)
-        self.assertIn("stop prompting more items", printed)
-
-    def test_print_prompt_help_supports_apply_mode(self):
-        with mock.patch("builtins.print") as print_mock:
-            print_prompt_help(True)
-
-        printed = "\n".join(
-            call.args[0] for call in print_mock.call_args_list if call.args
-        )
-        self.assertIn("use this and all remaining", printed)
-        self.assertIn("remaining labels in this action", printed)
 
     def test_print_match_summary_uses_single_line_for_one_bucket(self):
         item = make_item(1, "One")
@@ -363,9 +454,6 @@ class FormattingTests(unittest.TestCase):
 
 class InlineMarkdownColourisationTests(unittest.TestCase):
     """Verify Markdown stripping and colour assignment for inline spans."""
-
-    # Tests run without a TTY so colourise() returns plain text.
-    # We verify that formatting markers are stripped from the output.
 
     def test_bold_markers_stripped(self):
         self.assertEqual(
@@ -413,9 +501,6 @@ class InlineMarkdownColourisationTests(unittest.TestCase):
         self.assertEqual(colourise_inline_markdown(""), "")
 
     def test_tty_bold_uses_red(self):
-        """Bold markers should produce red ANSI output on a TTY."""
-        tty = mock.Mock()
-        tty.isatty.return_value = True
         with mock.patch("ai_labelling.formatting.colourise") as col_mock:
             col_mock.side_effect = lambda t, c, **kw: f"[{c}:{t}]"
             result = colourise_inline_markdown("**bold** text")
@@ -423,14 +508,24 @@ class InlineMarkdownColourisationTests(unittest.TestCase):
         self.assertIn("[white: text]", result)
 
     def test_tty_italic_uses_yellow(self):
-        """Italic markers should produce yellow ANSI output on a TTY."""
         with mock.patch("ai_labelling.formatting.colourise") as col_mock:
             col_mock.side_effect = lambda t, c, **kw: f"[{c}:{t}]"
             result = colourise_inline_markdown("*italic*")
         self.assertIn("[yellow:italic]", result)
 
+    def test_tty_underscore_italic_uses_yellow(self):
+        with mock.patch("ai_labelling.formatting.colourise") as col_mock:
+            col_mock.side_effect = lambda t, c, **kw: f"[{c}:{t}]"
+            result = colourise_inline_markdown("_italic_")
+        self.assertIn("[yellow:italic]", result)
+
+    def test_tty_bold_italic_uses_red(self):
+        with mock.patch("ai_labelling.formatting.colourise") as col_mock:
+            col_mock.side_effect = lambda t, c, **kw: f"[{c}:{t}]"
+            result = colourise_inline_markdown("***both***")
+        self.assertIn("[red:both]", result)
+
     def test_tty_inline_code_uses_green(self):
-        """Inline code backticks should produce green ANSI output on a TTY."""
         with mock.patch("ai_labelling.formatting.colourise") as col_mock:
             col_mock.side_effect = lambda t, c, **kw: f"[{c}:{t}]"
             result = colourise_inline_markdown("`make`")
@@ -483,8 +578,13 @@ class ColourisedBodyPreviewTests(unittest.TestCase):
         self.assertNotIn("`", result)
         self.assertIn("make", result)
 
+    def test_quote_block_rendered_with_marker(self):
+        result = format_body_preview_colourised(
+            "> warning", width=80, max_lines=4
+        )
+        self.assertIn(">", result)
+
     def test_tty_heading_uses_reverse_video(self):
-        """ATX headings should be rendered in reverse video on a TTY."""
         with mock.patch("ai_labelling.formatting.colourise") as col_mock:
             col_mock.side_effect = lambda t, c, **kw: f"[{c}:{t}]"
             result = format_body_preview_colourised(
@@ -493,141 +593,9 @@ class ColourisedBodyPreviewTests(unittest.TestCase):
         self.assertIn("[reverse:Title]", result)
 
     def test_tty_setext_heading_uses_reverse_video(self):
-        """Setext headings should be rendered in reverse video on a TTY."""
         with mock.patch("ai_labelling.formatting.colourise") as col_mock:
             col_mock.side_effect = lambda t, c, **kw: f"[{c}:{t}]"
             result = format_body_preview_colourised(
                 "Title\n=====\n\nText.", width=80, max_lines=4
             )
         self.assertIn("[reverse:Title]", result)
-
-
-class CommentBodyTests(unittest.TestCase):
-    """Verify the Markdown comment body generated for labelling actions."""
-
-    def _suggestion(self, add=None, remove=None, reason=""):
-        return LabelSuggestion(
-            add_labels=add or [],
-            remove_labels=remove or [],
-            reason=reason,
-        )
-
-    def test_comment_contains_header_link(self):
-        body = format_comment_body(
-            self._suggestion(add=["bug"]),
-            applied_add=["bug"],
-            applied_remove=[],
-            model="anthropic:claude-haiku-4-5-20251001",
-            version="abc1234",
-            allow_label_removals=False,
-        )
-        self.assertIn("AI-assisted labelling", body)
-        self.assertIn("GenAI-Assisted-Labelling", body)
-
-    def test_comment_contains_version_and_model(self):
-        body = format_comment_body(
-            self._suggestion(add=["bug"]),
-            applied_add=["bug"],
-            applied_remove=[],
-            model="anthropic:claude-haiku-4-5-20251001",
-            version="abc1234",
-            allow_label_removals=False,
-        )
-        self.assertIn("`abc1234`", body)
-        self.assertIn("`anthropic:claude-haiku-4-5-20251001`", body)
-
-    def test_comment_quotes_reasoning(self):
-        body = format_comment_body(
-            self._suggestion(add=["bug"], reason="Matches a crash pattern."),
-            applied_add=["bug"],
-            applied_remove=[],
-            model="m",
-            version="v",
-            allow_label_removals=False,
-        )
-        self.assertIn("> Matches a crash pattern.", body)
-
-    def test_comment_accepted_addition_no_strikethrough(self):
-        body = format_comment_body(
-            self._suggestion(add=["bug"]),
-            applied_add=["bug"],
-            applied_remove=[],
-            model="m",
-            version="v",
-            allow_label_removals=False,
-        )
-        self.assertIn("  - `bug`", body)
-        self.assertNotIn("~~", body)
-
-    def test_comment_rejected_addition_uses_strikethrough(self):
-        body = format_comment_body(
-            self._suggestion(add=["bug", "docs"]),
-            applied_add=["bug"],
-            applied_remove=[],
-            model="m",
-            version="v",
-            allow_label_removals=False,
-        )
-        self.assertIn("  - `bug`", body)
-        self.assertIn("  - ~~`docs`~~ (rejected by operator)", body)
-
-    def test_comment_removals_shown_when_allowed(self):
-        body = format_comment_body(
-            self._suggestion(add=[], remove=["stale"]),
-            applied_add=[],
-            applied_remove=["stale"],
-            model="m",
-            version="v",
-            allow_label_removals=True,
-        )
-        self.assertIn("Suggested removals:", body)
-        self.assertIn("  - `stale`", body)
-
-    def test_comment_removals_hidden_when_disallowed(self):
-        body = format_comment_body(
-            self._suggestion(add=[], remove=["stale"]),
-            applied_add=[],
-            applied_remove=[],
-            model="m",
-            version="v",
-            allow_label_removals=False,
-        )
-        self.assertNotIn("Suggested removals:", body)
-        self.assertNotIn("stale", body)
-
-    def test_comment_rejected_removal_uses_strikethrough(self):
-        body = format_comment_body(
-            self._suggestion(add=[], remove=["stale", "old"]),
-            applied_add=[],
-            applied_remove=["old"],
-            model="m",
-            version="v",
-            allow_label_removals=True,
-        )
-        self.assertIn("  - `old`", body)
-        self.assertIn("  - ~~`stale`~~ (rejected by operator)", body)
-
-    def test_comment_addition_labels_sorted_alphabetically(self):
-        body = format_comment_body(
-            self._suggestion(add=["zzz", "aaa"]),
-            applied_add=["zzz", "aaa"],
-            applied_remove=[],
-            model="m",
-            version="v",
-            allow_label_removals=False,
-        )
-        aaa_pos = body.index("aaa")
-        zzz_pos = body.index("zzz")
-        self.assertLess(aaa_pos, zzz_pos)
-
-    def test_comment_starts_with_heading_and_ends_with_newline(self):
-        body = format_comment_body(
-            self._suggestion(add=["bug"]),
-            applied_add=["bug"],
-            applied_remove=[],
-            model="m",
-            version="v",
-            allow_label_removals=False,
-        )
-        self.assertTrue(body.startswith("## "))
-        self.assertTrue(body.endswith("\n"))

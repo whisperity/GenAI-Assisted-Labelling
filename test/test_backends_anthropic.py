@@ -152,11 +152,33 @@ class AnthropicBackendTests(unittest.TestCase):
             backend.extract_json("not json at all")
 
     def test_extract_json_rejects_non_dict_response(self):
-        """A JSON array at the top level should raise a RuntimeError."""
+        """A non-object JSON response (no brace) raises RuntimeError."""
 
         backend = AnthropicBackend(name="Anthropic")
-        with self.assertRaisesRegex(RuntimeError, "non-object"):
+        with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
             backend.extract_json("[1, 2, 3]")
+
+    def test_extract_json_ignores_trailing_text_after_object(self):
+        """JSON followed by closing fence and markdown should still parse."""
+
+        backend = AnthropicBackend(name="Anthropic")
+        payload = (
+            '{\n  "add_labels": [],\n  "remove_labels": [],\n'
+            '  "issue_type": null,\n  "reason": "fine"\n}\n'
+            "```\n\nSome explanation text.\n"
+        )
+        result = backend.extract_json(payload)
+        self.assertEqual(result["reason"], "fine")
+        self.assertIsNone(result["issue_type"])
+
+    def test_extract_json_ignores_preamble_before_object(self):
+        """Text before the opening brace should be skipped."""
+
+        backend = AnthropicBackend(name="Anthropic")
+        result = backend.extract_json(
+            'Here is the JSON:\n{"add_labels": ["bug"], "reason": "x"}'
+        )
+        self.assertEqual(result["reason"], "x")
 
     def test_sanitise_headers_redacts_api_key(self):
         """The x-api-key header value should be replaced with a sentinel."""

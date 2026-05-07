@@ -140,3 +140,54 @@ class BackendBaseTests(unittest.TestCase):
         )
 
         self.assertNotIn("issue_type", prompt)
+
+    def test_suggest_labels_raises_when_add_labels_missing(self):
+        """Missing 'add_labels' list must raise RuntimeError."""
+
+        class BadBackend(AIBackend):  # pylint: disable=too-few-public-methods
+            """Returns a response without add_labels."""
+
+            def run_prompt(self, prompt, model_spec, *, allow_label_removals):
+                return {"reason": "ok"}
+
+        with self.assertRaisesRegex(RuntimeError, "add_labels"):
+            BadBackend(name="Bad").suggest_labels(
+                make_item(1, "X"),
+                [LabelDefinition("bug", "Bug")],
+                ModelSpec("codex", None, None),
+                False,
+            )
+
+    def test_suggest_labels_raises_when_reason_missing(self):
+        """Missing 'reason' string must raise RuntimeError."""
+
+        class BadBackend(AIBackend):  # pylint: disable=too-few-public-methods
+            """Returns a response without reason."""
+
+            def run_prompt(self, prompt, model_spec, *, allow_label_removals):
+                return {"add_labels": []}
+
+        with self.assertRaisesRegex(RuntimeError, "reason"):
+            BadBackend(name="Bad").suggest_labels(
+                make_item(1, "X"),
+                [LabelDefinition("bug", "Bug")],
+                ModelSpec("codex", None, None),
+                False,
+            )
+
+    def test_suggest_labels_raises_when_add_labels_not_list(self):
+        """A non-list 'add_labels' value must raise RuntimeError."""
+
+        class BadBackend(AIBackend):  # pylint: disable=too-few-public-methods
+            """Returns add_labels as a string instead of a list."""
+
+            def run_prompt(self, prompt, model_spec, *, allow_label_removals):
+                return {"add_labels": "bug", "reason": "ok"}
+
+        with self.assertRaisesRegex(RuntimeError, "add_labels"):
+            BadBackend(name="Bad").suggest_labels(
+                make_item(1, "X"),
+                [LabelDefinition("bug", "Bug")],
+                ModelSpec("codex", None, None),
+                False,
+            )
