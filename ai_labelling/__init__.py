@@ -87,6 +87,7 @@ def review_and_apply_suggestions(
     dry_run=False,
     comment_reason=False,
     valid_issue_types=(),
+    assign_issue_to_solver=False,
 ):
     """Review AI suggestions and optionally apply label changes."""
 
@@ -99,6 +100,7 @@ def review_and_apply_suggestions(
         dry_run=dry_run,
         comment_reason=comment_reason,
         valid_issue_types=valid_issue_types,
+        assign_issue_to_solver=assign_issue_to_solver,
     )
 
 
@@ -128,6 +130,7 @@ def main() -> int:
             dry_run=args.dry_run,
             comment_reason=args.comment_reason,
             valid_issue_types=valid_issue_types,
+            assign_issue_to_solver=args.assign_issue_to_solver,
         )
         return 0
 
@@ -179,6 +182,7 @@ def main() -> int:
         dry_run=args.dry_run,
         comment_reason=args.comment_reason,
         valid_issue_types=valid_issue_types,
+        assign_issue_to_solver=args.assign_issue_to_solver,
     )
     return 0
 

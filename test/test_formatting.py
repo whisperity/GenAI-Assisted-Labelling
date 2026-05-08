@@ -291,12 +291,58 @@ class PrintHelpersTests(unittest.TestCase):
                 ),
             )
         ]
-        with mock.patch("builtins.print") as print_mock:
+        with mock.patch(
+            "ai_labelling.formatting.colourise",
+            side_effect=lambda t, *_a, **_kw: t,
+        ), mock.patch("builtins.print") as print_mock:
             print_changes_summary(results, allow_label_removals=False)
         printed = "\n".join(
             str(c.args[0]) for c in print_mock.call_args_list if c.args
         )
-        self.assertIn("~ Bug", printed)
+        self.assertIn("[Type]", printed)
+        self.assertIn("Bug", printed)
+        self.assertIn("->", printed)
+
+    def test_print_changes_summary_empty_produces_no_output(self):
+        with mock.patch("builtins.print") as print_mock:
+            print_changes_summary([], allow_label_removals=False)
+        print_mock.assert_not_called()
+
+    def test_print_changes_summary_no_output_when_only_skipped_items(self):
+        results = [
+            SuggestionResult(
+                item=make_item(1, "One"),
+                label_suggestion=LabelSuggestion(
+                    add_labels=[], remove_labels=[], reason=""
+                ),
+            )
+        ]
+        with mock.patch("builtins.print") as print_mock:
+            print_changes_summary(results, allow_label_removals=False)
+        print_mock.assert_not_called()
+
+    def test_print_changes_summary_shows_assignee_change(self):
+        results = [
+            SuggestionResult(
+                item=make_item(1, "One", assignees=["alice"]),
+                label_suggestion=LabelSuggestion(
+                    add_labels=[], remove_labels=[], reason=""
+                ),
+                applied_assignee="bob",
+            )
+        ]
+        with mock.patch(
+            "ai_labelling.formatting.colourise",
+            side_effect=lambda t, *_a, **_kw: t,
+        ), mock.patch("builtins.print") as print_mock:
+            print_changes_summary(results, allow_label_removals=False)
+        printed = "\n".join(
+            str(c.args[0]) for c in print_mock.call_args_list if c.args
+        )
+        self.assertIn("[Assignee]", printed)
+        self.assertIn("@alice", printed)
+        self.assertIn("@bob", printed)
+        self.assertIn("->", printed)
 
     def test_print_exception_diagnostics_writes_context_to_stderr(self):
         exc = RuntimeError("something failed")

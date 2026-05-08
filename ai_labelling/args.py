@@ -255,6 +255,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     github_group.add_argument(
+        "--assign-issue-to-solver",
+        dest="assign_issue_to_solver",
+        action="store_true",
+        help=(
+            "For closed issues where a pull request that solved the issue "
+            "can be found, suggest replacing the current assignee(s) with "
+            "the author of that pull request."
+        ),
+    )
+    github_group.add_argument(
         "--id",
         type=positive_int,
         metavar="NUMBER",
@@ -282,6 +292,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
 
     parser.set_defaults(
+        assign_issue_to_solver=False,
         include_issues=True,
         include_prs=False,
         include_open=True,

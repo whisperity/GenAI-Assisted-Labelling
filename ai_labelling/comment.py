@@ -1,6 +1,6 @@
 """Markdown comment-body construction for labelling actions."""
 
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from ai_labelling.config import REPO_URL
 from ai_labelling.models import LabelSuggestion
@@ -49,6 +49,7 @@ def _format_issue_type_line(
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments
+# pylint: disable=too-many-locals
 def format_comment_body(
     original_suggestion: LabelSuggestion,
     applied_add: Sequence[str],
@@ -58,6 +59,8 @@ def format_comment_body(
     allow_label_removals: bool,
     *,
     applied_issue_type: Optional[str] = None,
+    closing_pr: Optional[Tuple[int, str]] = None,
+    applied_assignee: Optional[str] = None,
 ) -> str:
     """Build the Markdown comment body for a labelling action."""
 
@@ -76,6 +79,23 @@ def format_comment_body(
         lines += ["**Reasoning:**", ""]
         for line in original_suggestion.reason.strip().splitlines():
             lines.append(f"> {line}")
+        lines.append("")
+
+    if closing_pr is not None:
+        pr_number, pr_author = closing_pr
+        blurb = (
+            f"(as author of pull request `#{pr_number}` "
+            "that solved this issue)"
+        )
+        if applied_assignee:
+            lines.append(
+                f"**Assignee change:** `@{pr_author}` {blurb}"
+            )
+        else:
+            lines.append(
+                f"**Assignee change:** ~~`@{pr_author}`~~ {blurb} "
+                "(rejected by operator)"
+            )
         lines.append("")
 
     if original_suggestion.issue_type is not None:

@@ -1,5 +1,6 @@
 """Shared data structures and pure data helpers for the labelling workflow."""
 
+import dataclasses
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional, Sequence
@@ -26,6 +27,7 @@ class WorkItem:  # pylint: disable=too-many-instance-attributes
     author_login: str
     kind: str
     issue_type: Optional[str] = None
+    assignees: List[str] = dataclasses.field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -170,6 +172,7 @@ class SuggestionResult:
     item: WorkItem
     label_suggestion: LabelSuggestion
     model: str = ""
+    applied_assignee: Optional[str] = None
 
 
 class UserQuit(Exception):

@@ -727,3 +727,118 @@ class ParseGhTimingTests(unittest.TestCase):
     def test_monotonic_suffix_stripped_from_timestamp(self):
         timing, _ = _parse_gh_timing(self._TYPICAL)
         self.assertNotIn("m=+", timing or "")
+
+
+class AssigneesParsingTests(unittest.TestCase):
+    """Verify assignee parsing in work_item_from_search_result."""
+
+    def _entry(self, assignees):
+        return {
+            "number": 1, "title": "T", "body": "", "state": "open",
+            "labels": [], "html_url": "", "updated_at": "2026-05-01T00:00:00Z",
+            "created_at": "2026-05-01T00:00:00Z",
+            "user": {"login": "author"}, "assignees": assignees,
+        }
+
+    def test_parses_single_assignee(self):
+        item = work_item_from_search_result(
+            self._entry([{"login": "alice"}]), "issue"
+        )
+        self.assertEqual(item.assignees, ["alice"])
+
+    def test_parses_multiple_assignees(self):
+        item = work_item_from_search_result(
+            self._entry([{"login": "alice"}, {"login": "bob"}]), "issue"
+        )
+        self.assertIn("alice", item.assignees)
+        self.assertIn("bob", item.assignees)
+
+    def test_empty_assignees_gives_empty_list(self):
+        item = work_item_from_search_result(self._entry([]), "issue")
+        self.assertEqual(item.assignees, [])
+
+
+class GetClosingPrTests(unittest.TestCase):
+    """Verify get_closing_pr GraphQL parsing."""
+
+    def setUp(self):
+        self.client = GitHubClient()
+
+    def _response(self, pr_number=None, login=None):
+        nodes = []
+        if pr_number is not None:
+            nodes = [{"closer": {
+                "number": pr_number,
+                "author": {"login": login or "dev"},
+            }}]
+        return mock.Mock(
+            returncode=0,
+            stdout=__import__("json").dumps({
+                "data": {"repository": {"issue": {
+                    "timelineItems": {"nodes": nodes}
+                }}}
+            }),
+            stderr="",
+        )
+
+    def test_returns_pr_number_and_author(self):
+        with mock.patch(
+            "ai_labelling.github_client.run",
+            return_value=self._response(42, "dev"),
+        ):
+            result = self.client.get_closing_pr("owner/repo", 1)
+        self.assertEqual(result, (42, "dev"))
+
+    def test_returns_none_when_no_closed_event(self):
+        with mock.patch(
+            "ai_labelling.github_client.run",
+            return_value=self._response(),
+        ):
+            result = self.client.get_closing_pr("owner/repo", 1)
+        self.assertIsNone(result)
+
+    def test_returns_none_on_gh_error(self):
+        with mock.patch(
+            "ai_labelling.github_client.run",
+            return_value=mock.Mock(returncode=1, stdout="", stderr="err"),
+        ):
+            result = self.client.get_closing_pr("owner/repo", 1)
+        self.assertIsNone(result)
+
+    def test_closer_without_number_returns_none(self):
+        payload = {"data": {"repository": {"issue": {
+            "timelineItems": {"nodes": [{"closer": {"author": {}}}]}
+        }}}}
+        with mock.patch(
+            "ai_labelling.github_client.run",
+            return_value=mock.Mock(
+                returncode=0,
+                stdout=__import__("json").dumps(payload),
+                stderr="",
+            ),
+        ):
+            result = self.client.get_closing_pr("owner/repo", 1)
+        self.assertIsNone(result)
+
+
+class SetAssigneesTests(unittest.TestCase):
+    """Verify set_assignees builds the correct gh command and body."""
+
+    def setUp(self):
+        self.client = GitHubClient()
+
+    def test_patches_issue_with_assignees_list(self):
+        item = make_item(7, "Seven")
+        completed = mock.Mock(stdout="", stderr="")
+
+        with mock.patch(
+            "ai_labelling.github_client.run", return_value=completed
+        ) as run_mock:
+            self.client.set_assignees("owner/repo", item, ["alice"])
+
+        call_args = run_mock.call_args
+        argv = call_args.args[0]
+        self.assertIn("PATCH", argv)
+        self.assertIn("repos/owner/repo/issues/7", argv)
+        body = __import__("json").loads(call_args.kwargs["input_text"])
+        self.assertEqual(body["assignees"], ["alice"])

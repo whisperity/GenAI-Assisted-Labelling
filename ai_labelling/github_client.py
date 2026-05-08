@@ -108,6 +108,11 @@ def work_item_from_search_result(
         if isinstance(label, dict) and "name" in label:
             labels.append(str(label["name"]))
 
+    assignees = []
+    for assignee in entry.get("assignees", []):
+        if isinstance(assignee, dict) and "login" in assignee:
+            assignees.append(str(assignee["login"]))
+
     kind = "pr" if "pull_request" in entry else "issue"
     if kind != expected_kind:
         raise RuntimeError(f"expected {expected_kind}, got {kind}")
@@ -131,6 +136,7 @@ def work_item_from_search_result(
         author_login=str(entry.get("user", {}).get("login", "")),
         kind=kind,
         issue_type=issue_type,
+        assignees=assignees,
     )
 
 
@@ -326,6 +332,83 @@ class GitHubClient:
             raise RuntimeError(f"unexpected payload for #{number}")
         kind = "pr" if "pull_request" in entry else "issue"
         return work_item_from_search_result(entry, kind)
+
+    def get_closing_pr(
+        self,
+        repo: str,
+        issue_number: int,
+    ) -> Optional[Tuple[int, str]]:
+        """Return ``(pr_number, author_login)`` for the PR that closed this
+        issue, or ``None`` when no such PR can be found via GraphQL."""
+
+        owner, repo_name = repo.split("/", 1)
+        query = (
+            "query($owner:String!,$repo:String!,$number:Int!){"
+            "repository(owner:$owner,name:$repo){"
+            "issue(number:$number){"
+            "timelineItems(itemTypes:[CLOSED_EVENT],first:1){"
+            "nodes{...on ClosedEvent{"
+            "closer{...on PullRequest{"
+            "number author{login}}}}}}}}}"
+        )
+        completed = run(
+            (
+                "gh", "api", "graphql",
+                "-f", f"query={query}",
+                "-f", f"owner={owner}",
+                "-f", f"repo={repo_name}",
+                "-F", f"number={issue_number}",
+            ),
+            check=False,
+        )
+        if completed.returncode != 0:
+            return None
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            return None
+        nodes = (
+            payload.get("data", {})
+            .get("repository", {})
+            .get("issue", {})
+            .get("timelineItems", {})
+            .get("nodes", [])
+        )
+        if not nodes:
+            return None
+        closer = nodes[0].get("closer") if isinstance(nodes[0], dict) else None
+        if not isinstance(closer, dict):
+            return None
+        pr_number = closer.get("number")
+        author = closer.get("author") or {}
+        login = author.get("login") if isinstance(author, dict) else None
+        if (
+            not isinstance(pr_number, int)
+            or not isinstance(login, str)
+            or not login
+        ):
+            return None
+        return pr_number, login
+
+    def set_assignees(
+        self,
+        repo: str,
+        item: WorkItem,
+        assignees: List[str],
+    ) -> None:
+        """Replace the assignee list on an issue through ``gh``."""
+
+        body = json.dumps({"assignees": list(assignees)})
+        _emit_completed_output(
+            run(
+                (
+                    "gh", "api", "--method", "PATCH",
+                    f"repos/{repo}/issues/{item.number}",
+                    "--input", "-",
+                ),
+                input_text=body,
+            )
+        )
 
     def add_labels(
         self,

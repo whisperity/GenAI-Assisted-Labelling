@@ -395,6 +395,12 @@ def print_item_details(item: WorkItem) -> None:
     )
     print(colourise("Existing labels:", "blue", bold=True))
     print(format_label_block(item.labels))
+    if item.assignees:
+        print(colourise("Assignees:", "blue", bold=True))
+        for login in item.assignees:
+            print(f"  - @{login}")
+    else:
+        print(colourise("Assignee:", "blue", bold=True) + " [none]")
     print()
     print(format_body_preview_colourised(item.body))
     print()
@@ -478,25 +484,24 @@ def print_changes_summary(
     *,
     dry_run: bool = True,
 ) -> None:
-    """Print a label-change summary after a run."""
+    """Print label-change summary after a run; silent when nothing changed."""
 
-    title = (
-        "Label changes (not applied):"
-        if dry_run
-        else "Label changes:"
-    )
-    print(colourise(title, "blue", bold=True))
+    tag = colourise("[Assignee]", "cyan", bold=True)
+    type_tag = colourise("[Type]", "cyan", bold=True)
+
+    lines: List[str] = []
     for result in suggestion_results:
         item = result.item
         suggestion = result.label_suggestion
+        has_assignee = result.applied_assignee is not None
         has_type = item.kind == "issue" and suggestion.issue_type is not None
         has_adds = bool(suggestion.add_labels)
         has_removes = allow_label_removals and bool(suggestion.remove_labels)
-        if not has_type and not has_adds and not has_removes:
+        if not any([has_assignee, has_type, has_adds, has_removes]):
             continue
         state_colour = "green" if item.state.casefold() == "open" else "red"
         kind_display = "issue" if item.kind == "issue" else "PR"
-        print(
+        lines.append(
             "- "
             + colourise(f"#{item.number}", "yellow", bold=True)
             + " "
@@ -506,13 +511,34 @@ def print_changes_summary(
                 f"[{item.state} {kind_display}]", state_colour, bold=True
             )
         )
+        if has_assignee:
+            old_part = (
+                ", ".join(f"@{a}" for a in item.assignees)
+                or "[none]"
+            )
+            lines.append(
+                f"  {tag} {old_part} -> @{result.applied_assignee}"
+            )
         if has_type:
-            print(
-                "  " + colourise(f"~ {suggestion.issue_type}", "cyan")
+            old_type = item.issue_type or "[none]"
+            lines.append(
+                f"  {type_tag} {old_type} -> {suggestion.issue_type}"
             )
         for lbl in suggestion.add_labels:
-            print("  " + colourise(f"+ {lbl}", "green"))
+            lines.append("  " + colourise(f"+ {lbl}", "green"))
         if allow_label_removals:
             for lbl in suggestion.remove_labels:
-                print("  " + colourise(f"- {lbl}", "magenta"))
+                lines.append("  " + colourise(f"- {lbl}", "magenta"))
+
+    if not lines:
+        return
+
+    title = (
+        "Label changes (not applied):"
+        if dry_run
+        else "Label changes:"
+    )
+    print(colourise(title, "blue", bold=True))
+    for line in lines:
+        print(line)
     print()

@@ -28,6 +28,7 @@ class PackageFacadeTests(unittest.TestCase):
             created=False,
             date=DEFAULT_DATE_CUTOFF,
             interactive=False,
+            assign_issue_to_solver=False,
             limit=None,
             allow_label_removals=False,
             include_closed=False,
@@ -65,6 +66,7 @@ class PackageFacadeTests(unittest.TestCase):
             created=False,
             date=DEFAULT_DATE_CUTOFF,
             interactive=False,
+            assign_issue_to_solver=False,
             limit=None,
             allow_label_removals=False,
             comment_reason=False,
@@ -147,6 +149,7 @@ class PackageFacadeTests(unittest.TestCase):
             dry_run=False,
             comment_reason=False,
             valid_issue_types=[],
+            assign_issue_to_solver=False,
         )
 
     def test_main_returns_zero_when_no_items_are_selected(self):
@@ -156,6 +159,7 @@ class PackageFacadeTests(unittest.TestCase):
             created=False,
             date=DEFAULT_DATE_CUTOFF,
             interactive=False,
+            assign_issue_to_solver=False,
             limit=None,
             allow_label_removals=False,
             include_closed=False,

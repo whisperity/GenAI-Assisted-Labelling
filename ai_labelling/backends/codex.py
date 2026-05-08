@@ -1,4 +1,5 @@
 """Codex CLI backend implementation."""
+# pylint: disable=duplicate-code
 
 import json
 import tempfile

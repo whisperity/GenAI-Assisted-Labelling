@@ -237,3 +237,52 @@ class VersionUrlTests(unittest.TestCase):
             allow_label_removals=False,
         )
         self.assertIn(f"{REPO_URL}/tree/abc1234", body)
+
+
+class AssigneeCommentTests(unittest.TestCase):
+    """Verify assignee change section in the comment body."""
+
+    def _body(self, closing_pr, applied_assignee):
+        return format_comment_body(
+            _suggestion(add=["bug"]),
+            applied_add=["bug"],
+            applied_remove=[],
+            model="m",
+            version="v",
+            allow_label_removals=False,
+            closing_pr=closing_pr,
+            applied_assignee=applied_assignee,
+        )
+
+    def test_no_assignee_section_when_no_closing_pr(self):
+        body = self._body(None, None)
+        self.assertNotIn("Assignee change", body)
+
+    def test_accepted_assignee_shows_username(self):
+        body = self._body((123, "dev"), "dev")
+        self.assertIn("Assignee change", body)
+        self.assertIn("`@dev`", body)
+        self.assertIn("`#123`", body)
+        self.assertNotIn("rejected", body)
+
+    def test_rejected_assignee_shows_strikethrough(self):
+        body = self._body((123, "dev"), None)
+        self.assertIn("Assignee change", body)
+        self.assertIn("~~`@dev`~~", body)
+        self.assertIn("rejected by operator", body)
+
+    def test_assignee_section_appears_before_type_section(self):
+        body = format_comment_body(
+            LabelSuggestion([], [], "", issue_type="Bug"),
+            applied_add=[],
+            applied_remove=[],
+            model="m",
+            version="v",
+            allow_label_removals=False,
+            closing_pr=(10, "dev"),
+            applied_assignee="dev",
+            applied_issue_type="Bug",
+        )
+        self.assertLess(
+            body.index("Assignee change"), body.index("issue type")
+        )
