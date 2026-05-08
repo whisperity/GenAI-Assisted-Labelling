@@ -1,9 +1,9 @@
 """Markdown comment-body construction for labelling actions."""
 
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence
 
 from ai_labelling.config import REPO_URL
-from ai_labelling.models import LabelSuggestion
+from ai_labelling.models import ClosingPR, LabelSuggestion
 
 
 def _version_url(version: str) -> str:
@@ -59,7 +59,7 @@ def format_comment_body(
     allow_label_removals: bool,
     *,
     applied_issue_type: Optional[str] = None,
-    closing_pr: Optional[Tuple[int, str]] = None,
+    closing_pr: Optional[ClosingPR] = None,
     applied_assignee: Optional[str] = None,
 ) -> str:
     """Build the Markdown comment body for a labelling action."""
@@ -82,18 +82,19 @@ def format_comment_body(
         lines.append("")
 
     if closing_pr is not None:
-        pr_number, pr_author = closing_pr
         blurb = (
-            f"(as author of pull request `#{pr_number}` "
+            f"(as author of pull request `#{closing_pr.pr_number}` "
             "that solved this issue)"
         )
         if applied_assignee:
             lines.append(
-                f"**Assignee change:** `@{pr_author}` {blurb}"
+                f"**Assignee change:** "
+                f"`@{closing_pr.author_login}` {blurb}"
             )
         else:
             lines.append(
-                f"**Assignee change:** ~~`@{pr_author}`~~ {blurb} "
+                f"**Assignee change:** "
+                f"~~`@{closing_pr.author_login}`~~ {blurb} "
                 "(rejected by operator)"
             )
         lines.append("")

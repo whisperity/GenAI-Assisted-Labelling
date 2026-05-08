@@ -1,8 +1,6 @@
 """Interactive prompt helpers for the labelling workflow."""
 
-from typing import Callable
-
-from ai_labelling.models import UserQuit
+from ai_labelling.models import InputFn, UserQuit
 from ai_labelling.terminal import colourise
 
 
@@ -52,7 +50,7 @@ def prompt_confirmation(
     prompt: str,
     *,
     allow_apply_all: bool,
-    input_fn: Callable[[str], str] = input,
+    input_fn: InputFn = input,
 ) -> str:
     """Prompt until the user answers with a supported git-style choice."""
 
@@ -74,7 +72,7 @@ def prompt_yes_no(
     prompt: str,
     *,
     default_yes: bool,
-    input_fn: Callable[[str], str] = input,
+    input_fn: InputFn = input,
 ) -> bool:
     """Prompt for a yes/no retry decision with an optional default answer."""
 

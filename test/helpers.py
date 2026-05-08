@@ -1,12 +1,18 @@
 """Shared test helpers for the ``ai_labelling`` package."""
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 
-from ai_labelling.models import WorkItem
+from ai_labelling.models import ItemKind, WorkItem
 
 
 def make_item(
-    number, title, *, kind="issue", state="open", labels=None, assignees=None
-):
+    number: int,
+    title: str,
+    *,
+    kind: ItemKind = "issue",
+    state: str = "open",
+    labels=None,
+    assignees=None,
+) -> WorkItem:
     """Create a small ``WorkItem`` fixture for tests."""
 
     return WorkItem(

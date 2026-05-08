@@ -9,6 +9,7 @@ from unittest import mock
 from test.helpers import make_item
 from ai_labelling.config import DEFAULT_DATE_CUTOFF
 from ai_labelling.models import (
+    ClosingPR,
     IssueTypeDefinition,
     LabelDefinition,
     LabelSuggestion,
@@ -1468,10 +1469,10 @@ class AssignIssueToSolverTests(unittest.TestCase):
         with mock.patch.object(
             self.workflow.github_client,
             "get_closing_pr",
-            return_value=(42, "dev"),
+            return_value=ClosingPR(pr_number=42, author_login="dev"),
         ):
             result = self.workflow._find_closing_pr("owner/repo", item)
-        self.assertEqual(result, (42, "dev"))
+        self.assertEqual(result, ClosingPR(pr_number=42, author_login="dev"))
 
     def test_collect_assignee_returns_false_when_no_pr(self):
         result = self.workflow._collect_assignee_decision(
@@ -1485,7 +1486,7 @@ class AssignIssueToSolverTests(unittest.TestCase):
     def test_collect_assignee_force_returns_true(self):
         result = self.workflow._collect_assignee_decision(
             make_item(1, "T"),
-            closing_pr=(42, "dev"),
+            closing_pr=ClosingPR(pr_number=42, author_login="dev"),
             force=True,
             input_fn=lambda _: "n",
         )
@@ -1494,7 +1495,7 @@ class AssignIssueToSolverTests(unittest.TestCase):
     def test_collect_assignee_y_returns_true(self):
         result = self.workflow._collect_assignee_decision(
             make_item(1, "T"),
-            closing_pr=(42, "dev"),
+            closing_pr=ClosingPR(pr_number=42, author_login="dev"),
             force=False,
             input_fn=lambda _: "y",
         )
@@ -1503,7 +1504,7 @@ class AssignIssueToSolverTests(unittest.TestCase):
     def test_collect_assignee_n_returns_false(self):
         result = self.workflow._collect_assignee_decision(
             make_item(1, "T"),
-            closing_pr=(42, "dev"),
+            closing_pr=ClosingPR(pr_number=42, author_login="dev"),
             force=False,
             input_fn=lambda _: "n",
         )
@@ -1513,7 +1514,7 @@ class AssignIssueToSolverTests(unittest.TestCase):
         item = make_item(1, "T", assignees=["dev"])
         result = self.workflow._collect_assignee_decision(
             item,
-            closing_pr=(42, "dev"),
+            closing_pr=ClosingPR(pr_number=42, author_login="dev"),
             force=False,
             input_fn=lambda _: (_ for _ in ()).throw(
                 AssertionError("prompt must not fire")
@@ -1525,7 +1526,7 @@ class AssignIssueToSolverTests(unittest.TestCase):
         item = make_item(1, "T", assignees=["Dev"])
         result = self.workflow._collect_assignee_decision(
             item,
-            closing_pr=(42, "dev"),
+            closing_pr=ClosingPR(pr_number=42, author_login="dev"),
             force=True,
             input_fn=lambda _: "y",
         )
@@ -1536,7 +1537,8 @@ class AssignIssueToSolverTests(unittest.TestCase):
         with mock.patch.object(self.workflow, "print_summary"), \
                 mock.patch("ai_labelling.workflow.print_changes_summary"), \
                 mock.patch.object(
-                    self.workflow, "_find_closing_pr", return_value=(42, "dev")
+                    self.workflow, "_find_closing_pr",
+                    return_value=ClosingPR(pr_number=42, author_login="dev")
                 ), \
                 mock.patch.object(
                     self.workflow, "set_assignees_with_retry"
@@ -1557,7 +1559,8 @@ class AssignIssueToSolverTests(unittest.TestCase):
         with mock.patch.object(self.workflow, "print_summary"), \
                 mock.patch("ai_labelling.workflow.print_changes_summary"), \
                 mock.patch.object(
-                    self.workflow, "_find_closing_pr", return_value=(42, "dev")
+                    self.workflow, "_find_closing_pr",
+                    return_value=ClosingPR(pr_number=42, author_login="dev")
                 ), \
                 mock.patch.object(
                     self.workflow, "set_assignees_with_retry"

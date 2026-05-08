@@ -12,6 +12,7 @@ from ai_labelling.github_client import (
     _parse_gh_timing,
     work_item_from_search_result,
 )
+from ai_labelling.models import ClosingPR
 from ai_labelling.models import (
     IssueTypeDefinition,
     LabelDefinition,
@@ -787,7 +788,7 @@ class GetClosingPrTests(unittest.TestCase):
             return_value=self._response(42, "dev"),
         ):
             result = self.client.get_closing_pr("owner/repo", 1)
-        self.assertEqual(result, (42, "dev"))
+        self.assertEqual(result, ClosingPR(pr_number=42, author_login="dev"))
 
     def test_returns_none_when_no_closed_event(self):
         with mock.patch(

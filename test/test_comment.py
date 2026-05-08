@@ -5,7 +5,7 @@ import unittest
 
 from ai_labelling.comment import format_comment_body, _version_url
 from ai_labelling.config import REPO_URL
-from ai_labelling.models import LabelSuggestion
+from ai_labelling.models import ClosingPR, LabelSuggestion
 
 
 def _suggestion(add=None, remove=None, reason="", issue_type=None):
@@ -259,14 +259,14 @@ class AssigneeCommentTests(unittest.TestCase):
         self.assertNotIn("Assignee change", body)
 
     def test_accepted_assignee_shows_username(self):
-        body = self._body((123, "dev"), "dev")
+        body = self._body(ClosingPR(pr_number=123, author_login="dev"), "dev")
         self.assertIn("Assignee change", body)
         self.assertIn("`@dev`", body)
         self.assertIn("`#123`", body)
         self.assertNotIn("rejected", body)
 
     def test_rejected_assignee_shows_strikethrough(self):
-        body = self._body((123, "dev"), None)
+        body = self._body(ClosingPR(pr_number=123, author_login="dev"), None)
         self.assertIn("Assignee change", body)
         self.assertIn("~~`@dev`~~", body)
         self.assertIn("rejected by operator", body)
@@ -279,7 +279,7 @@ class AssigneeCommentTests(unittest.TestCase):
             model="m",
             version="v",
             allow_label_removals=False,
-            closing_pr=(10, "dev"),
+            closing_pr=ClosingPR(pr_number=10, author_login="dev"),
             applied_assignee="dev",
             applied_issue_type="Bug",
         )

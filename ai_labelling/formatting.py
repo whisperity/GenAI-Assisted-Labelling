@@ -14,6 +14,9 @@ from ai_labelling.models import (
 )
 from ai_labelling.terminal import colourise
 
+_RenderFn = Callable[[List[str], str], List[str]]
+"""Type alias for body-block rendering functions used in preview builders."""
+
 # Inline Markdown span patterns, matched in priority order so that ***
 # is tested before ** which is tested before bare *.
 _INLINE_MD_RE = re.compile(
@@ -180,7 +183,7 @@ def _build_preview(
     *,
     width: int,
     max_lines: int,
-    render_fn: Callable[[List[str], str], List[str]],
+    render_fn: _RenderFn,
 ) -> str:
     """Core preview loop shared by plain and colourised preview builders."""
 
@@ -478,7 +481,7 @@ def print_match_summary(items: Sequence[WorkItem]) -> None:
         print(f"  - {words[0].capitalize()} {words[1]}: {len(bucket_items)}")
 
 
-def print_changes_summary(
+def print_changes_summary(  # pylint: disable=too-many-locals
     suggestion_results: Sequence[SuggestionResult],
     allow_label_removals: bool,
     *,

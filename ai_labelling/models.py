@@ -3,7 +3,13 @@
 import dataclasses
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Literal, Optional, Sequence
+
+ItemKind = Literal["issue", "pr"]
+"""Whether a work item is an issue or a pull request."""
+
+InputFn = Callable[[str], str]
+"""Type alias for user-input functions (prompt → response)."""
 
 
 def parse_github_timestamp(timestamp: str) -> datetime:
@@ -25,7 +31,7 @@ class WorkItem:  # pylint: disable=too-many-instance-attributes
     updated_at: str
     created_at: str
     author_login: str
-    kind: str
+    kind: ItemKind
     issue_type: Optional[str] = None
     assignees: List[str] = dataclasses.field(default_factory=list)
 
@@ -65,6 +71,10 @@ class IssueTypeDefinition:
     name: str
     description: str
     type_id: int = 0
+
+
+IssueTypeMap = Dict[str, IssueTypeDefinition]
+"""Mapping of case-folded issue-type name to its definition."""
 
 
 @dataclass(frozen=True)
@@ -163,6 +173,37 @@ def _select_issue_type(
     if canonical.casefold() == (current_issue_type or "").casefold():
         return None
     return canonical
+
+
+@dataclass(frozen=True)
+class ClosingPR:
+    """A pull request whose merge closed a given issue."""
+
+    pr_number: int
+    author_login: str
+
+
+@dataclass(frozen=True)
+class AppliedChanges:
+    """Changes that were actually applied during a review-and-apply step."""
+
+    added_labels: List[str] = dataclasses.field(default_factory=list)
+    removed_labels: List[str] = dataclasses.field(default_factory=list)
+    issue_type: Optional[str] = None
+    closing_pr: Optional[ClosingPR] = None
+    assignee: Optional[str] = None
+
+    def has_label_or_type_changes(self) -> bool:
+        """Return True when labels or issue type were changed."""
+
+        return bool(
+            self.added_labels or self.removed_labels or self.issue_type
+        )
+
+    def has_any_changes(self) -> bool:
+        """Return True when any change was applied."""
+
+        return self.has_label_or_type_changes() or self.assignee is not None
 
 
 @dataclass(frozen=True)

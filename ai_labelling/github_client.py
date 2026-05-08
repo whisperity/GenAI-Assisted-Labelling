@@ -9,7 +9,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from ai_labelling.config import REPO_DETECTION_ORDER
 from ai_labelling.models import (
+    ClosingPR,
     IssueTypeDefinition,
+    ItemKind,
     LabelDefinition,
     SearchOptions,
     WorkItem,
@@ -96,7 +98,7 @@ def _emit_completed_output(completed: subprocess.CompletedProcess) -> None:
 
 def work_item_from_search_result(
     entry: object,
-    expected_kind: str,
+    expected_kind: ItemKind,
 ) -> WorkItem:
     """Convert a GitHub search result payload into a ``WorkItem``."""
 
@@ -113,7 +115,7 @@ def work_item_from_search_result(
         if isinstance(assignee, dict) and "login" in assignee:
             assignees.append(str(assignee["login"]))
 
-    kind = "pr" if "pull_request" in entry else "issue"
+    kind: ItemKind = "pr" if "pull_request" in entry else "issue"
     if kind != expected_kind:
         raise RuntimeError(f"expected {expected_kind}, got {kind}")
 
@@ -232,7 +234,7 @@ class GitHubClient:
     def build_search_query(
         self,
         repo: str,
-        kind: str,
+        kind: ItemKind,
         search_options: SearchOptions,
     ) -> str:
         """Build the GitHub search query for issues or pull requests."""
@@ -253,7 +255,7 @@ class GitHubClient:
     def search_items(
         self,
         repo: str,
-        kind: str,
+        kind: ItemKind,
         search_options: SearchOptions,
     ) -> List[WorkItem]:
         """Search GitHub for matching issues or pull requests."""
@@ -330,14 +332,14 @@ class GitHubClient:
         entry = self.json(("api", f"repos/{repo}/issues/{number}"))
         if not isinstance(entry, dict):
             raise RuntimeError(f"unexpected payload for #{number}")
-        kind = "pr" if "pull_request" in entry else "issue"
+        kind: ItemKind = "pr" if "pull_request" in entry else "issue"
         return work_item_from_search_result(entry, kind)
 
     def get_closing_pr(
         self,
         repo: str,
         issue_number: int,
-    ) -> Optional[Tuple[int, str]]:
+    ) -> Optional[ClosingPR]:
         """Return ``(pr_number, author_login)`` for the PR that closed this
         issue, or ``None`` when no such PR can be found via GraphQL."""
 
@@ -388,7 +390,7 @@ class GitHubClient:
             or not login
         ):
             return None
-        return pr_number, login
+        return ClosingPR(pr_number=pr_number, author_login=login)
 
     def set_assignees(
         self,

@@ -6,7 +6,7 @@ import concurrent.futures
 import os
 import sys
 import time as time_module
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence
 
 from ai_labelling.args import default_cutoff, parse_model_spec
 from ai_labelling.backends import get_backend_for_provider
@@ -25,7 +25,11 @@ from ai_labelling.formatting import (
 from ai_labelling.github_client import GitHubClient
 from ai_labelling.interaction import prompt_confirmation, prompt_yes_no
 from ai_labelling.models import (
+    AppliedChanges,
+    ClosingPR,
+    InputFn,
     IssueTypeDefinition,
+    IssueTypeMap,
     LabelDefinition,
     LabelSuggestion,
     SearchOptions,
@@ -36,6 +40,9 @@ from ai_labelling.models import (
 )
 from ai_labelling.shell import get_script_version
 from ai_labelling.terminal import colourise, get_debug_level
+
+_Operation = Callable[[], object]
+"""Zero-argument callable passed to ``_retry_until_success``."""
 
 
 class LabellingWorkflow:
@@ -90,7 +97,7 @@ class LabellingWorkflow:
         valid_labels: Sequence[LabelDefinition],
         model: str,
         allow_label_removals: bool,
-        input_fn: Callable[[str], str] = input,
+        input_fn: InputFn = input,
         valid_issue_types: Sequence[IssueTypeDefinition] = (),
     ) -> Optional[SuggestionResult]:
         """Run one AI suggestion, optionally retrying after failures."""
@@ -119,7 +126,7 @@ class LabellingWorkflow:
         repo: str,
         item: WorkItem,
         labels: Sequence[str],
-        input_fn: Callable[[str], str] = input,
+        input_fn: InputFn = input,
     ) -> None:
         """Apply labels, offering retries when the write step fails."""
 
@@ -139,7 +146,7 @@ class LabellingWorkflow:
         repo: str,
         item: WorkItem,
         label: str,
-        input_fn: Callable[[str], str] = input,
+        input_fn: InputFn = input,
     ) -> None:
         """Remove one label, offering retries when the write step fails."""
 
@@ -162,7 +169,7 @@ class LabellingWorkflow:
         repo: str,
         item: WorkItem,
         issue_type: IssueTypeDefinition,
-        input_fn: Callable[[str], str] = input,
+        input_fn: InputFn = input,
     ) -> None:
         """Set the issue type, offering retries when the write step fails."""
 
@@ -184,7 +191,7 @@ class LabellingWorkflow:
         repo: str,
         item: WorkItem,
         assignees: List[str],
-        input_fn: Callable[[str], str] = input,
+        input_fn: InputFn = input,
     ) -> None:
         """Replace assignees on an issue, offering retries on failure."""
 
@@ -243,7 +250,7 @@ class LabellingWorkflow:
     def select_items_to_handle(
         items: Sequence[WorkItem],
         force: bool,
-        input_fn: Callable[[str], str] = input,
+        input_fn: InputFn = input,
     ) -> List[WorkItem]:
         """Select which items should be sent to the AI backend."""
 
@@ -293,7 +300,7 @@ class LabellingWorkflow:
         valid_labels: Sequence[LabelDefinition],
         model: str,
         allow_label_removals: bool,
-        input_fn: Callable[[str], str] = input,
+        input_fn: InputFn = input,
         valid_issue_types: Sequence[IssueTypeDefinition] = (),
     ) -> List[SuggestionResult]:
         """Run AI suggestions for selected items in parallel."""
@@ -338,7 +345,7 @@ class LabellingWorkflow:
         valid_labels: Sequence[LabelDefinition],
         model: str,
         allow_label_removals: bool,
-        input_fn: Callable[[str], str],
+        input_fn: InputFn,
         valid_issue_types: Sequence[IssueTypeDefinition],
     ) -> List[SuggestionResult]:
         """Run AI suggestions sequentially for the single-worker case."""
@@ -366,7 +373,7 @@ class LabellingWorkflow:
         model: str,
         allow_label_removals: bool,
         worker_count: int,
-        input_fn: Callable[[str], str],
+        input_fn: InputFn,
         valid_issue_types: Sequence[IssueTypeDefinition],
     ) -> List[SuggestionResult]:
         """Run AI suggestions across a process pool, retrying on failure."""
@@ -462,7 +469,7 @@ class LabellingWorkflow:
         suggestion_results: Sequence[SuggestionResult],
         force: bool,
         allow_label_removals: bool,
-        input_fn: Callable[[str], str] = input,
+        input_fn: InputFn = input,
         *,
         dry_run: bool = False,
         comment_reason: bool = False,
@@ -471,7 +478,9 @@ class LabellingWorkflow:
     ) -> None:
         """Review AI suggestions and optionally apply label changes."""
 
-        issue_type_map = {t.name.casefold(): t for t in valid_issue_types}
+        issue_type_map: IssueTypeMap = {
+            t.name.casefold(): t for t in valid_issue_types
+        }
         version = get_script_version() if comment_reason else ""
         summary_results: List[SuggestionResult] = []
 
@@ -490,29 +499,25 @@ class LabellingWorkflow:
                 input_fn=input_fn,
                 assign_issue_to_solver=assign_issue_to_solver,
             )
-            if any(applied[:3]) or applied[4] is not None:
+            if applied.has_any_changes():
                 summary_results.append(
                     SuggestionResult(
                         item=result.item,
                         label_suggestion=LabelSuggestion(
-                            applied[0],  # add
-                            applied[1],  # remove
+                            applied.added_labels,
+                            applied.removed_labels,
                             result.label_suggestion.reason,
-                            issue_type=applied[2],
+                            issue_type=applied.issue_type,
                         ),
                         model=result.model,
-                        applied_assignee=applied[4],
+                        applied_assignee=applied.assignee,
                     )
                 )
             if comment_reason:
                 self._post_comment_for_result(
                     repo,
                     result,
-                    applied_add=applied[0],
-                    applied_remove=applied[1],
-                    applied_issue_type=applied[2],
-                    closing_pr=applied[3],
-                    applied_assignee=applied[4],
+                    applied=applied,
                     version=version,
                     allow_label_removals=allow_label_removals,
                 )
@@ -535,7 +540,7 @@ class LabellingWorkflow:
         comment_reason: bool = False,
         valid_issue_types: Sequence[IssueTypeDefinition] = (),
         assign_issue_to_solver: bool = False,
-        input_fn: Callable[[str], str] = input,
+        input_fn: InputFn = input,
     ) -> None:
         """Interactively handle items by number until the user quits.
 
@@ -543,7 +548,9 @@ class LabellingWorkflow:
         iteration. All filter and '--id' options are ignored.
         """
 
-        issue_type_map = {t.name.casefold(): t for t in valid_issue_types}
+        issue_type_map: IssueTypeMap = {
+            t.name.casefold(): t for t in valid_issue_types
+        }
         version = get_script_version() if comment_reason else ""
         summary_results: List[SuggestionResult] = []
 
@@ -627,29 +634,25 @@ class LabellingWorkflow:
                 )
             except UserQuit:
                 break
-            if any(applied[:3]) or applied[4] is not None:
+            if applied.has_any_changes():
                 summary_results.append(
                     SuggestionResult(
                         item=result.item,
                         label_suggestion=LabelSuggestion(
-                            applied[0],
-                            applied[1],
+                            applied.added_labels,
+                            applied.removed_labels,
                             result.label_suggestion.reason,
-                            issue_type=applied[2],
+                            issue_type=applied.issue_type,
                         ),
                         model=result.model,
-                        applied_assignee=applied[4],
+                        applied_assignee=applied.assignee,
                     )
                 )
             if comment_reason:
                 self._post_comment_for_result(
                     repo,
                     result,
-                    applied_add=applied[0],
-                    applied_remove=applied[1],
-                    applied_issue_type=applied[2],
-                    closing_pr=applied[3],
-                    applied_assignee=applied[4],
+                    applied=applied,
                     version=version,
                     allow_label_removals=allow_label_removals,
                 )
@@ -666,22 +669,17 @@ class LabellingWorkflow:
         *,
         force: bool,
         allow_label_removals: bool,
-        issue_type_map: dict,
-        input_fn: Callable[[str], str],
+        issue_type_map: IssueTypeMap,
+        input_fn: InputFn,
         assign_issue_to_solver: bool = False,
-    ) -> tuple:
+    ) -> AppliedChanges:
         """Collect and apply all decisions for one result.
-
-        Returns ``(adds, removes, issue_type, closing_pr, applied_assignee)``.
 
         All decisions are collected up-front before any GitHub API call fires.
         A ``q`` at any prompt aborts the whole item with no partial changes.
-        ``closing_pr`` is ``(pr_number, author_login)`` when a closing PR was
-        found (regardless of whether the user accepted the change); otherwise
-        ``None``. ``applied_assignee`` is the new assignee login when accepted.
         """
 
-        closing_pr: Optional[Tuple[int, str]] = (
+        closing_pr: Optional[ClosingPR] = (
             self._find_closing_pr(repo, result.item)
             if assign_issue_to_solver
             else None
@@ -717,13 +715,13 @@ class LabellingWorkflow:
             )
 
         applied_assignee: Optional[str] = None
-        if accepted_assignee:
-            if closing_pr is not None:
-                pr_author = closing_pr[1]
-                self.set_assignees_with_retry(
-                    repo, result.item, [pr_author], input_fn=input_fn,
-                )
-                applied_assignee = pr_author
+        if accepted_assignee and closing_pr is not None:
+            self.set_assignees_with_retry(
+                repo, result.item,
+                [closing_pr.author_login],
+                input_fn=input_fn,
+            )
+            applied_assignee = closing_pr.author_login
 
         applied_issue_type: Optional[str] = None
         if accepted_type is not None:
@@ -737,26 +735,26 @@ class LabellingWorkflow:
                 repo, result.item, accepted_adds, input_fn=input_fn,
             )
 
-        applied_remove: List[str] = []
+        applied_removes: List[str] = []
         for label in accepted_removes:
             self.remove_label_with_retry(
                 repo, result.item, label, input_fn=input_fn,
             )
-            applied_remove.append(label)
+            applied_removes.append(label)
 
-        return (
-            list(accepted_adds),
-            applied_remove,
-            applied_issue_type,
-            closing_pr,
-            applied_assignee,
+        return AppliedChanges(
+            added_labels=list(accepted_adds),
+            removed_labels=applied_removes,
+            issue_type=applied_issue_type,
+            closing_pr=closing_pr,
+            assignee=applied_assignee,
         )
 
     def _find_closing_pr(
         self,
         repo: str,
         item: WorkItem,
-    ) -> Optional[Tuple[int, str]]:
+    ) -> Optional[ClosingPR]:
         """Return the PR that closed this issue, or ``None``."""
 
         if item.kind != "issue" or item.state.casefold() != "closed":
@@ -770,23 +768,23 @@ class LabellingWorkflow:
         self,
         item: WorkItem,
         *,
-        closing_pr: Optional[Tuple[int, str]],
+        closing_pr: Optional[ClosingPR],
         force: bool,
-        input_fn: Callable[[str], str],
+        input_fn: InputFn,
     ) -> bool:
         """Prompt for an assignee change; return True if accepted."""
 
         if closing_pr is None:
             return False
-        pr_number, pr_author = closing_pr
         existing = {a.casefold() for a in item.assignees}
-        if pr_author.casefold() in existing:
+        if closing_pr.author_login.casefold() in existing:
             return False
         if force:
             return True
         answer = prompt_confirmation(
             f"Set assignee of ISSUE #{item.number} to "
-            f"@{pr_author} (author of PR #{pr_number} that closed it)? "
+            f"@{closing_pr.author_login} "
+            f"(author of PR #{closing_pr.pr_number} that closed it)? "
             "[y/n/q/?] ",
             allow_apply_all=False,
             input_fn=input_fn,
@@ -797,9 +795,9 @@ class LabellingWorkflow:
         self,
         result: SuggestionResult,
         *,
-        issue_type_map: dict,
+        issue_type_map: IssueTypeMap,
         force: bool,
-        input_fn: Callable[[str], str],
+        input_fn: InputFn,
     ) -> Optional[IssueTypeDefinition]:
         """Prompt for the issue-type decision; return the type-def or None."""
 
@@ -830,7 +828,7 @@ class LabellingWorkflow:
         *,
         removal: bool,
         force: bool,
-        input_fn: Callable[[str], str],
+        input_fn: InputFn,
     ) -> List[str]:
         """Prompt user for each label; return the accepted-label list."""
 
@@ -871,17 +869,12 @@ class LabellingWorkflow:
             # "N" → skip this label, continue
         return accepted
 
-    # pylint: disable=too-many-arguments,too-many-positional-arguments
     def _post_comment_for_result(
         self,
         repo: str,
         result: SuggestionResult,
         *,
-        applied_add: Sequence[str],
-        applied_remove: Sequence[str],
-        applied_issue_type: Optional[str],
-        closing_pr: Optional[Tuple[int, str]],
-        applied_assignee: Optional[str],
+        applied: AppliedChanges,
         version: str,
         allow_label_removals: bool,
     ) -> None:
@@ -889,14 +882,14 @@ class LabellingWorkflow:
 
         body = format_comment_body(
             result.label_suggestion,
-            applied_add,
-            applied_remove,
+            applied.added_labels,
+            applied.removed_labels,
             result.model,
             version,
             allow_label_removals,
-            applied_issue_type=applied_issue_type,
-            closing_pr=closing_pr,
-            applied_assignee=applied_assignee,
+            applied_issue_type=applied.issue_type,
+            closing_pr=applied.closing_pr,
+            applied_assignee=applied.assignee,
         )
         if get_debug_level() >= 2:
             print(
@@ -985,12 +978,12 @@ class LabellingWorkflow:
 
 
 def _retry_until_success(
-    operation: Callable[[], object],
+    operation: _Operation,
     *,
     context: str,
     retry_prompt: str,
     default_yes: bool,
-    input_fn: Callable[[str], str],
+    input_fn: InputFn,
 ):
     """Run ``operation`` and prompt for retry on failure until success/decline.
 
