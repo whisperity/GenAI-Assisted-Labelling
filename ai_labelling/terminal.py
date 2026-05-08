@@ -60,10 +60,12 @@ def get_debug_level() -> int:
         return 1
 
 
-def debug_log(body: str, *, colour: str = "magenta") -> None:
-    """Print one debug line when any non-zero ``DEBUG`` level is active."""
+def debug_log(
+    body: str, *, colour: str = "magenta", min_level: int = 1
+) -> None:
+    """Print one debug line when ``DEBUG`` is at least ``min_level``."""
 
-    if get_debug_level() < 1:
+    if get_debug_level() < min_level:
         return
     print(
         colourise(body, colour, stream=sys.stderr, bold=True),

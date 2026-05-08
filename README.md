@@ -8,27 +8,38 @@ the most appropriate issue type) based on the title and body, and offers an
 interactive review-and-apply loop that lets you accept, skip, or batch-apply
 the suggestions through the GitHub CLI.
 
-## Contents
+## Installation
 
-1. [Dependencies](#dependencies)
-2. [Quick start](#quick-start)
-3. [How it works](#how-it-works)
-4. [Repository selection](#repository-selection)
-5. [Filtering issues and pull requests](#filtering-issues-and-pull-requests)
-6. [Targeting one specific item](#targeting-one-specific-item)
-7. [Choosing an AI provider and model](#choosing-an-ai-provider-and-model)
-8. [Reasoning effort](#reasoning-effort)
-9. [Dry-run, force, and label removals](#dry-run-force-and-label-removals)
-10. [Posting an audit comment](#posting-an-audit-comment)
-11. [Interactive prompts](#interactive-prompts)
-12. [Debugging output](#debugging-output)
-13. [Common recipes](#common-recipes)
-14. [Exit codes](#exit-codes)
-15. [Development](#development)
+Install the latest release directly from GitHub using `pip`:
+
+```bash
+pip install git+https://github.com/whisperity/GenAI-Assisted-Labelling.git@v1.0.0
+```
+
+Replace `v1.0.0` with any other [release tag][releases] to pin a specific
+version, or omit the `@...` suffix to install the current development tip of
+the `master` branch:
+
+```bash
+pip install git+https://github.com/whisperity/GenAI-Assisted-Labelling.git
+```
+
+After installation the `ai-labelling` command is available on your `PATH`
+inside the active Python environment.
+
+> **Tip:** Use a virtual environment to keep the installation isolated:
+>
+> ```bash
+> python -m venv ~/.venvs/ai-labelling
+> source ~/.venvs/ai-labelling/bin/activate
+> pip install git+https://github.com/whisperity/GenAI-Assisted-Labelling.git@v1.0.0
+> ```
+
+[releases]: https://github.com/whisperity/GenAI-Assisted-Labelling/releases
 
 ## Dependencies
 
-- Python 3.10 or newer.
+- Python 3.9 or newer.
 - The GitHub CLI client, `gh`: <https://cli.github.com>. The current
   `gh auth login` session must have permission to read issues, pull requests,
   labels, and (for issue types) the parent organisation.
@@ -47,13 +58,13 @@ relies on the standard library.
 From inside a Git checkout of the repository you want to label:
 
 ```bash
-$ /path/to/ai-labelling
+$ ai-labelling
 ```
 
 Or against any repository:
 
 ```bash
-$ ./ai-labelling --repository owner/name
+$ ai-labelling --repository owner/name
 ```
 
 The default behaviour is:

@@ -1,10 +1,11 @@
 """GitHub CLI-backed client helpers."""
 
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from ai_labelling.config import REPO_DETECTION_ORDER
 from ai_labelling.models import (
@@ -15,23 +16,82 @@ from ai_labelling.models import (
     parse_github_timestamp,
 )
 from ai_labelling.shell import run
-from ai_labelling.terminal import colourise
+from ai_labelling.terminal import colourise, debug_log
+
+_GH_META_PREFIX = "* Request "
+_GH_AT_PREFIX = "* Request at "
+_GH_TOOK_PREFIX = "* Request took "
+
+_TS_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\.\d+)? ([+-]\d{4})"
+)
+_DUR_RE = re.compile(r"([\d.]+)s$")
+
+
+def _parse_gh_timing(stderr: str) -> Tuple[Optional[str], str]:
+    """Separate ``gh`` request-metadata lines from real error output.
+
+    Returns a ``(timing_line, errors)`` pair where ``timing_line`` is a
+    single-line summary of the request timestamp and duration (or ``None``
+    when no timing lines were found), and ``errors`` is any non-metadata
+    stderr content that should always be shown.
+    """
+
+    timestamp: Optional[str] = None
+    duration: Optional[str] = None
+    error_lines: List[str] = []
+
+    for line in stderr.splitlines():
+        if line.startswith(_GH_AT_PREFIX):
+            raw = line[len(_GH_AT_PREFIX):]
+            m = _TS_RE.search(raw)
+            if m:
+                timestamp = f"{m.group(1)} {m.group(2)}"
+        elif line.startswith(_GH_TOOK_PREFIX):
+            raw = line[len(_GH_TOOK_PREFIX):].strip()
+            dm = _DUR_RE.match(raw)
+            duration = f"{float(dm.group(1)):.3f}s" if dm else raw
+        elif not line.startswith(_GH_META_PREFIX) and line.strip():
+            error_lines.append(line)
+
+    timing: Optional[str] = None
+    if timestamp or duration:
+        parts: List[str] = []
+        if timestamp:
+            parts.append(timestamp)
+        if duration:
+            parts.append(f"({duration})")
+        timing = "  ↳ " + "  ".join(parts)
+
+    return timing, "\n".join(error_lines)
 
 
 def _emit_completed_output(completed: subprocess.CompletedProcess) -> None:
-    """Forward a completed ``gh`` invocation's stdout/stderr to the user."""
+    """Forward a completed ``gh`` invocation's output, gated by debug level.
+
+    * stdout (JSON response)  — pretty-printed at DEBUG≥2
+    * stderr timing metadata  — condensed to one line at DEBUG≥1
+    * stderr error content    — always forwarded unconditionally
+    """
 
     if completed.stdout and completed.stdout.strip():
-        print(colourise(completed.stdout.strip(), "green", bold=True))
+        try:
+            pretty = json.dumps(
+                json.loads(completed.stdout), indent=2, ensure_ascii=False
+            )
+        except (json.JSONDecodeError, ValueError):
+            pretty = completed.stdout.strip()
+        debug_log(pretty, colour="green", min_level=2)
+
     if completed.stderr and completed.stderr.strip():
-        print(
-            colourise(
-                completed.stderr.strip(),
-                "yellow",
-                stream=sys.stderr,
-            ),
-            file=sys.stderr,
-        )
+        timing, errors = _parse_gh_timing(completed.stderr)
+        if timing:
+            debug_log(timing, colour="yellow", min_level=1)
+        if errors:
+            print(
+                colourise(errors, "yellow", stream=sys.stderr),
+                file=sys.stderr,
+            )
 
 
 def work_item_from_search_result(

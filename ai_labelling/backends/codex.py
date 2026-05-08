@@ -2,7 +2,9 @@
 
 import json
 import tempfile
+import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Sequence
 
 from ai_labelling.models import ModelSpec
@@ -130,6 +132,17 @@ class CodexBackend(AIBackend):
                     )
                 argv.append("-")
 
-                run(tuple(argv), input_text=prompt)
+                start = time.monotonic()
+                start_ts = datetime.now().astimezone()
+                try:
+                    run(tuple(argv), input_text=prompt)
+                finally:
+                    elapsed = time.monotonic() - start
+                    ts_str = start_ts.strftime("%Y-%m-%d %H:%M:%S %z")
+                    debug_log(
+                        f"  ↳ {ts_str}  ({elapsed:.3f}s)",
+                        colour="yellow",
+                        min_level=1,
+                    )
                 output_file.seek(0)
                 return json.load(output_file)

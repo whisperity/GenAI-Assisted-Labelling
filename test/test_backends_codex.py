@@ -45,7 +45,7 @@ class CodexBackendTests(unittest.TestCase):
 
         self.assertEqual(result, fake_json)
         run_mock.assert_called_once()
-        debug_log_mock.assert_called_once_with(
+        debug_log_mock.assert_any_call(
             "Issue title:\n<ISSUE TITLE OMITTED>\n"
             "Main body text:\n<ISSUE BODY OMITTED>"
         )

@@ -260,15 +260,16 @@ class HelpEpilogTests(unittest.TestCase):
         _ansi = re.compile(r"\x1b\[[0-9;]*m")
         help_text = _ansi.sub("", build_argument_parser().format_help())
         self.assertIn(
-            "DEBUG=1: show executed subprocess command lines",
+            "DEBUG=1: show subprocess commands and request/response timing",
             help_text,
         )
         self.assertIn(
-            "DEBUG=2: also show a sanitised AI prompt template",
+            "DEBUG=2: also show JSON responses (pretty-printed) "
+            "and sanitised AI prompts",
             help_text,
         )
         self.assertIn(
-            "DEBUG=3 or greater: also show the full AI prompt",
+            "DEBUG=3 or greater: also show full AI prompts",
             help_text,
         )
         self.assertIn("AI providers:", help_text)

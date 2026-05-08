@@ -2,9 +2,11 @@
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, List, Optional, Sequence
 
 from ai_labelling.models import ModelSpec
@@ -131,6 +133,8 @@ class AnthropicBackend(AIBackend):
             colour="cyan",
         )
 
+        start = time.monotonic()
+        start_ts = datetime.now().astimezone()
         try:
             with urllib.request.urlopen(request) as response:
                 return json.loads(response.read().decode("utf-8"))
@@ -141,6 +145,14 @@ class AnthropicBackend(AIBackend):
             raise RuntimeError(
                 f"Anthropic API request failed: {exc.reason}"
             ) from exc
+        finally:
+            elapsed = time.monotonic() - start
+            ts_str = start_ts.strftime("%Y-%m-%d %H:%M:%S %z")
+            debug_log(
+                f"  ↳ {ts_str}  ({elapsed:.3f}s)",
+                colour="yellow",
+                min_level=1,
+            )
 
     def get_default_model(self) -> str:
         """Return the newest listed Anthropic model ID."""

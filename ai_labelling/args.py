@@ -48,17 +48,18 @@ def build_help_epilog() -> str:
         + "\n"
         + format_help_epilog_entry(
             "DEBUG=1",
-            "show executed subprocess command lines",
+            "show subprocess commands and request/response timing",
         )
         + "\n"
         + format_help_epilog_entry(
             "DEBUG=2",
-            "also show a sanitised AI prompt template",
+            "also show JSON responses (pretty-printed) "
+            "and sanitised AI prompts",
         )
         + "\n"
         + format_help_epilog_entry(
             "DEBUG=3 or greater",
-            "also show the full AI prompt",
+            "also show full AI prompts",
         )
         + "\n\n"
         + colourise("AI providers:", "magenta", bold=True)

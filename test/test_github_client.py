@@ -9,6 +9,7 @@ from unittest import mock
 from test.helpers import make_item
 from ai_labelling.github_client import (
     GitHubClient,
+    _parse_gh_timing,
     work_item_from_search_result,
 )
 from ai_labelling.models import (
@@ -671,3 +672,58 @@ class GitHubClientTests(  # pylint: disable=too-many-public-methods
         self.assertIsNone(
             GitHubClient.parse_repo_from_remote("git@github.com:onlyowner")
         )
+
+
+class ParseGhTimingTests(unittest.TestCase):
+    """Verify extraction of gh request-metadata lines."""
+
+    _TYPICAL = (
+        "* Request at 2026-05-08 11:16:29.808334 +0200 CEST"
+        " m=+0.042254626\n"
+        "* Request to"
+        " https://api.github.com/repos/owner/repo/issues/1/labels\n"
+        "* Request took 5.522104083s\n"
+    )
+
+    def test_returns_timing_line_for_typical_gh_output(self):
+        timing, errors = _parse_gh_timing(self._TYPICAL)
+        self.assertIsNotNone(timing)
+        self.assertEqual(errors, "")
+
+    def test_timing_line_contains_date_and_offset(self):
+        timing, _ = _parse_gh_timing(self._TYPICAL)
+        self.assertIn("2026-05-08 11:16:29", timing)
+        self.assertIn("+0200", timing)
+
+    def test_timing_line_contains_rounded_duration(self):
+        timing, _ = _parse_gh_timing(self._TYPICAL)
+        self.assertIn("5.522s", timing)
+
+    def test_request_to_line_not_in_timing_or_errors(self):
+        timing, errors = _parse_gh_timing(self._TYPICAL)
+        self.assertNotIn("api.github.com", timing or "")
+        self.assertNotIn("api.github.com", errors)
+
+    def test_real_error_lines_returned_as_errors(self):
+        stderr = (
+            "* Request at 2026-05-08 11:00:00 +0000\n"
+            "* Request took 1.0s\n"
+            "HTTP 422 Unprocessable Entity\n"
+        )
+        timing, errors = _parse_gh_timing(stderr)
+        self.assertIsNotNone(timing)
+        self.assertIn("HTTP 422", errors)
+
+    def test_empty_stderr_returns_no_timing_no_errors(self):
+        timing, errors = _parse_gh_timing("")
+        self.assertIsNone(timing)
+        self.assertEqual(errors, "")
+
+    def test_only_error_lines_returns_no_timing(self):
+        timing, errors = _parse_gh_timing("gh: error: 401 Unauthorized\n")
+        self.assertIsNone(timing)
+        self.assertIn("401", errors)
+
+    def test_monotonic_suffix_stripped_from_timestamp(self):
+        timing, _ = _parse_gh_timing(self._TYPICAL)
+        self.assertNotIn("m=+", timing or "")
