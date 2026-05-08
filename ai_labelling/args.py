@@ -1,8 +1,10 @@
 """Argument parsing and model-selection helpers."""
 
 import argparse
+import shutil
+import textwrap
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Optional
+from typing import List, Optional, Union
 
 from ai_labelling.backends import (
     get_provider_default_model,
@@ -18,14 +20,42 @@ from ai_labelling.models import ModelSpec
 from ai_labelling.terminal import colourise
 
 
-def format_help_epilog_entry(name: str, description: str) -> str:
-    """Format one epilog entry with help-like ANSI highlighting."""
+_HELP_COL = 24  # column where descriptions start (matches argparse default)
 
-    return (
-        "  "
-        + colourise(name, "cyan", bold=True)
-        + f": {description}"
-    )
+
+def format_help_epilog_entry(
+    name: Union[str, List[str]],
+    description: str,
+) -> str:
+    """Format one epilog entry in argparse column-aligned style.
+
+    ``name`` may be a string or a list of alternative names.  A list is
+    rendered as ``first, second`` with a white-coloured ``", "`` separator,
+    matching the argparse ``--opt, --option`` style.  Descriptions are
+    wrapped to ``_HELP_WIDTH`` columns; continuation lines are indented
+    to ``_HELP_COL``.
+    """
+
+    if isinstance(name, list):
+        sep = colourise(", ", "white")
+        formatted = sep.join(colourise(n, "cyan", bold=True) for n in name)
+        name_len = sum(len(n) for n in name) + 2 * (len(name) - 1)
+    else:
+        formatted = colourise(name, "cyan", bold=True)
+        name_len = len(name)
+
+    header_len = 2 + name_len  # 2 leading spaces
+    if header_len < _HELP_COL:
+        prefix = "  " + formatted + " " * (_HELP_COL - header_len)
+    else:
+        prefix = "  " + formatted + "\n" + " " * _HELP_COL
+
+    desc_width = shutil.get_terminal_size((79, 24)).columns - _HELP_COL
+    lines = textwrap.wrap(description, width=desc_width)
+    if not lines:
+        return prefix.rstrip()
+    cont = "\n" + " " * _HELP_COL
+    return prefix + cont.join(lines)
 
 
 def build_help_epilog() -> str:
@@ -39,10 +69,10 @@ def build_help_epilog() -> str:
         for provider in get_supported_providers()
     )
     return (
-        colourise("Debugging:", "magenta", bold=True)
+        colourise("debug options:", "blue", bold=True)
         + "\n"
         + format_help_epilog_entry(
-            "DEBUG unset, empty, or 0",
+            "DEBUG=0",
             "no debug output",
         )
         + "\n"
@@ -58,11 +88,39 @@ def build_help_epilog() -> str:
         )
         + "\n"
         + format_help_epilog_entry(
-            "DEBUG=3 or greater",
+            "DEBUG=3",
             "also show full AI prompts",
         )
         + "\n\n"
-        + colourise("AI providers:", "magenta", bold=True)
+        + colourise("GitHub authentication:", "blue", bold=True)
+        + "\n"
+        + format_help_epilog_entry(
+            ["GH_TOKEN", "GITHUB_TOKEN"],
+            "direct bearer token passed to gh; disables App auth below",
+        )
+        + "\n"
+        + format_help_epilog_entry(
+            "GITHUB_APP_ID",
+            "numeric App ID — enables GitHub App authentication",
+        )
+        + "\n"
+        + format_help_epilog_entry(
+            "GITHUB_APP_PRIVATE_KEY",
+            "PEM private-key content (use with GITHUB_APP_ID)",
+        )
+        + "\n"
+        + format_help_epilog_entry(
+            "GITHUB_APP_PRIVATE_KEY_PATH",
+            "path to PEM key file (used when GITHUB_APP_PRIVATE_KEY "
+            "is not set)",
+        )
+        + "\n"
+        + format_help_epilog_entry(
+            "GITHUB_APP_INSTALLATION_ID",
+            "optional; skips per-repo installation lookup",
+        )
+        + "\n\n"
+        + colourise("AI providers:", "blue", bold=True)
         + "\n"
         f"{providers}"
     )

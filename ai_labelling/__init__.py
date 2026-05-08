@@ -2,11 +2,13 @@
 # pylint: disable=duplicate-code
 
 import argparse
+import os
 import subprocess
 import sys
 from typing import List, Sequence
 
 from ai_labelling.args import parse_args
+from ai_labelling.github_auth import resolve_github_token
 from ai_labelling.formatting import (
     print_match_summary,
     print_matching_items,
@@ -118,6 +120,10 @@ def main() -> int:
 
     args = parse_args()
     repo = args.repo or detect_repo()
+
+    token = resolve_github_token(repo)
+    if token:
+        os.environ["GH_TOKEN"] = token
 
     valid_labels = list_repo_labels(repo)
     if not valid_labels:

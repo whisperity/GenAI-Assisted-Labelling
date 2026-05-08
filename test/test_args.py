@@ -258,26 +258,31 @@ class HelpEpilogTests(unittest.TestCase):
 
     def test_help_epilog_describes_debug_levels_and_ai_providers(self):
         _ansi = re.compile(r"\x1b\[[0-9;]*m")
-        help_text = _ansi.sub("", build_argument_parser().format_help())
-        self.assertIn(
-            "DEBUG=1: show subprocess commands and request/response timing",
-            help_text,
-        )
-        self.assertIn(
-            "DEBUG=2: also show JSON responses (pretty-printed) "
-            "and sanitised AI prompts",
-            help_text,
-        )
-        self.assertIn(
-            "DEBUG=3 or greater: also show full AI prompts",
-            help_text,
-        )
-        self.assertIn("AI providers:", help_text)
-        self.assertIn("codex: the `codex` CLI", help_text)
-        self.assertIn("gpt-5.4-mini", help_text)
-        self.assertIn("anthropic:", help_text)
-        self.assertIn("claude-haiku-4-5-20251001", help_text)
-        self.assertIn("max", help_text)
+        raw = _ansi.sub("", build_argument_parser().format_help())
+        # Normalise wrapped text: rejoin hyphen-broken words, then merge
+        # continuation-indent lines so substring checks work reliably.
+        joined = re.sub(r"-\n\s+", "-", raw)
+        joined = re.sub(r"\n\s+", " ", joined)
+        self.assertIn("debug options:", raw)
+        self.assertIn("DEBUG=0", raw)
+        self.assertIn("DEBUG=1", raw)
+        self.assertIn("show subprocess commands and request/response timing",
+                      joined)
+        self.assertIn("DEBUG=2", raw)
+        self.assertIn("also show JSON responses (pretty-printed)", joined)
+        self.assertIn("DEBUG=3", raw)
+        self.assertIn("also show full AI prompts", joined)
+        self.assertIn("GitHub authentication:", raw)
+        self.assertIn("GH_TOKEN", raw)
+        self.assertIn("GITHUB_TOKEN", raw)
+        self.assertIn("GITHUB_APP_ID", raw)
+        self.assertIn("GITHUB_APP_PRIVATE_KEY", raw)
+        self.assertIn("AI providers:", raw)
+        self.assertIn("codex", raw)
+        self.assertIn("gpt-5.4-mini", joined)
+        self.assertIn("anthropic", raw)
+        self.assertIn("claude-haiku-4-5-20251001", joined)
+        self.assertIn("max", raw)
 
     def test_help_epilog_uses_help_like_colours_on_tty(self):
         with mock.patch(
@@ -288,13 +293,35 @@ class HelpEpilogTests(unittest.TestCase):
         used_colours = [
             call.args[1] for call in colourise_mock.call_args_list
         ]
-        self.assertIn("magenta", used_colours)
+        self.assertNotIn("magenta", used_colours)
+        self.assertIn("blue", used_colours)
         self.assertIn("cyan", used_colours)
 
-    def test_format_help_epilog_entry_returns_indented_line(self):
+    def test_format_help_epilog_entry_aligns_at_column_24(self):
         with mock.patch(
             "ai_labelling.args.colourise",
             side_effect=lambda text, *_a, **_kw: text,
         ):
             line = format_help_epilog_entry("KEY", "what it does")
-        self.assertEqual(line, "  KEY: what it does")
+        # "  KEY" = 5 chars; pad to col 24 = 19 spaces; then description
+        self.assertEqual(line, "  KEY" + " " * 19 + "what it does")
+
+    def test_format_help_epilog_entry_long_name_goes_to_next_line(self):
+        long_name = "A" * 23  # 2 + 23 = 25 >= 24 → newline
+        with mock.patch(
+            "ai_labelling.args.colourise",
+            side_effect=lambda text, *_a, **_kw: text,
+        ):
+            line = format_help_epilog_entry(long_name, "desc")
+        self.assertTrue(line.startswith("  " + long_name + "\n"))
+        self.assertIn(" " * 24 + "desc", line)
+
+    def test_format_help_epilog_entry_list_joins_with_comma(self):
+        with mock.patch(
+            "ai_labelling.args.colourise",
+            side_effect=lambda text, *_a, **_kw: text,
+        ):
+            line = format_help_epilog_entry(["FOO", "BAR"], "desc")
+        # "FOO, BAR" = 8 chars; 2+8=10 < 24 → same line
+        self.assertIn("FOO, BAR", line)
+        self.assertIn("desc", line)

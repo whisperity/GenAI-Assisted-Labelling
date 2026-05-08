@@ -40,9 +40,10 @@ inside the active Python environment.
 ## Dependencies
 
 - Python 3.9 or newer.
-- The GitHub CLI client, `gh`: <https://cli.github.com>. The current
-  `gh auth login` session must have permission to read issues, pull requests,
-  labels, and (for issue types) the parent organisation.
+- The GitHub CLI client, `gh`: <https://cli.github.com>. Either a personal
+  `gh auth login` session or a GitHub App (see below) must have permission to
+  read issues, pull requests, labels, and (for issue types) the parent
+  organisation.
 - Access to one of the supported generative AI services:
   - **Codex CLI** — a ChatGPT subscription with Codex
     (<https://chatgpt.com/codex>) access, plus the `codex` binary on `PATH`
@@ -112,6 +113,36 @@ end of the run.
 7. Once collection for the item finishes, confirmed changes are applied
    through `gh api` in a batch (label additions go in one request);
    quitting mid-collection leaves the item untouched.
+
+### GitHub App authentication
+
+As an alternative to `gh auth login` with a personal account, `ai-labelling`
+can authenticate as a **GitHub App** installed on the target organisation.
+
+`gh` does not natively accept GitHub App credentials, but it does honour the
+`GH_TOKEN` environment variable as a bearer token.  When the variables below
+are set, `ai-labelling` automatically generates an installation access token
+(valid for one hour) and injects it as `GH_TOKEN` before the first `gh` call.
+
+| Variable                      | Required         | Description                                                     |
+|-------------------------------|------------------|-----------------------------------------------------------------|
+| `GITHUB_APP_ID`               | yes              | Numeric App ID shown in the App's settings page                 |
+| `GITHUB_APP_PRIVATE_KEY`      | one of these two | PEM private-key content (literal `\n` sequences are normalised) |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | one of these two | Path to the PEM private-key file                                |
+| `GITHUB_APP_INSTALLATION_ID`  | no               | Skip the per-repo installation lookup and use this ID directly  |
+
+> **Note:** The **Client ID** listed in the App's settings is used for OAuth
+> user-authorisation flows only and is **not** needed here.
+
+Token generation uses the system `openssl` binary (standard on macOS and
+Linux) to sign the JWT.  If `GH_TOKEN` or `GITHUB_TOKEN` is already set in the
+environment those take precedence and no App credential lookup is performed.
+
+```bash
+export GITHUB_APP_ID=123456
+export GITHUB_APP_PRIVATE_KEY_PATH=/path/to/private-key.pem
+ai-labelling --repository owner/repo
+```
 
 ## Repository selection
 
