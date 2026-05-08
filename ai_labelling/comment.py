@@ -2,9 +2,18 @@
 
 from typing import List, Optional, Sequence
 
+from ai_labelling.config import REPO_URL
 from ai_labelling.models import LabelSuggestion
 
-REPO_URL = "http://github.com/whisperity/GenAI-Assisted-Labelling"
+
+def _version_url(version: str) -> str:
+    """Return the GitHub URL that the version string in a comment links to."""
+
+    if version.startswith("v"):
+        return f"{REPO_URL}/releases/tag/{version}"
+    if version != "unknown":
+        return f"{REPO_URL}/tree/{version}"
+    return REPO_URL
 
 
 def _format_label_lines(
@@ -58,7 +67,7 @@ def format_comment_body(
     lines: List[str] = [
         f"## [**AI-assisted labelling**]({REPO_URL})",
         "",
-        (f"script version [`{version}`]({REPO_URL}/tree/{version}), "
+        (f"script version [`{version}`]({_version_url(version)}), "
          f"using model: `{model}`"),
         "",
     ]

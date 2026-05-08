@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-labelling"
+version = "1.0.0"
+description = "AI-assisted label suggestion for GitHub issues and pull requests"
+readme = "README.md"
+license = { text = "GPL-3.0-only" }
+authors = [{ name = "Whisperity" }]
+requires-python = ">=3.9"
+keywords = [
+    "automation",
+    "github",
+    "issues",
+    "labels",
+    "llm",
+    "pull-requests",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Version Control :: Git",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/whisperity/GenAI-Assisted-Labelling"
+Repository = "https://github.com/whisperity/GenAI-Assisted-Labelling"
+"Bug Tracker" = "https://github.com/whisperity/GenAI-Assisted-Labelling/issues"
+Changelog = "https://github.com/whisperity/GenAI-Assisted-Labelling/releases"
+
+[project.scripts]
+ai-labelling = "ai_labelling:cli_main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ai_labelling*"]
+exclude = ["test*"]

@@ -1,6 +1,7 @@
 """Tests for subprocess and version helpers."""
 # pylint: disable=missing-function-docstring
 
+import importlib.metadata
 import unittest
 from unittest import mock
 
@@ -41,21 +42,42 @@ class RunTests(unittest.TestCase):
         self.assertFalse(run_mock.call_args.kwargs.get("check"))
 
 
+def _no_pkg():
+    """Return a mock.patch that makes importlib.metadata.version raise."""
+
+    return mock.patch(
+        "importlib.metadata.version",
+        side_effect=importlib.metadata.PackageNotFoundError("ai-labelling"),
+    )
+
+
 class GetScriptVersionTests(unittest.TestCase):
-    """Cover git-based script version detection."""
+    """Cover version detection priority: package metadata → git → unknown."""
+
+    def test_returns_package_version_when_installed(self):
+        with mock.patch("importlib.metadata.version", return_value="1.0.0"):
+            self.assertEqual(shell.get_script_version(), "v1.0.0")
+
+    def test_package_version_prefixed_with_v(self):
+        with mock.patch("importlib.metadata.version", return_value="2.3.4"):
+            self.assertRegex(shell.get_script_version(), r"^v")
 
     def test_returns_short_sha_when_git_succeeds(self):
         completed = mock.Mock(returncode=0, stdout="abc1234\n", stderr="")
-        with mock.patch("ai_labelling.shell.run", return_value=completed):
+        with _no_pkg(), mock.patch(
+            "ai_labelling.shell.run", return_value=completed
+        ):
             self.assertEqual(shell.get_script_version(), "abc1234")
 
     def test_returns_unknown_on_non_zero_exit(self):
         completed = mock.Mock(returncode=128, stdout="", stderr="not a repo")
-        with mock.patch("ai_labelling.shell.run", return_value=completed):
+        with _no_pkg(), mock.patch(
+            "ai_labelling.shell.run", return_value=completed
+        ):
             self.assertEqual(shell.get_script_version(), "unknown")
 
     def test_returns_unknown_when_run_raises_oserror(self):
-        with mock.patch(
+        with _no_pkg(), mock.patch(
             "ai_labelling.shell.run", side_effect=FileNotFoundError("git")
         ):
             self.assertEqual(shell.get_script_version(), "unknown")

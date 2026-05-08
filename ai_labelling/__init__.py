@@ -1,6 +1,9 @@
 """Public package facade for the AI-assisted labelling workflow."""
 # pylint: disable=duplicate-code
 
+import subprocess
+import sys
+
 from ai_labelling.args import parse_args
 from ai_labelling.formatting import (
     print_match_summary,
@@ -180,8 +183,45 @@ def main() -> int:
     return 0
 
 
+def cli_main() -> None:
+    """Console script entry point with exception handling."""
+
+    try:
+        raise SystemExit(main())
+    except UserQuit:
+        print(
+            colourise(
+                "Quit requested. Terminating immediately.",
+                "yellow",
+                bold=True,
+            )
+        )
+        raise SystemExit(0) from None
+    except subprocess.CalledProcessError as exc:
+        if exc.stdout:
+            print(
+                exc.stdout,
+                file=sys.stderr,
+                end="" if exc.stdout.endswith("\n") else "\n",
+            )
+        if exc.stderr:
+            print(
+                exc.stderr,
+                file=sys.stderr,
+                end="" if exc.stderr.endswith("\n") else "\n",
+            )
+        raise SystemExit(exc.returncode) from exc
+    except RuntimeError as exc:
+        print(
+            colourise(str(exc), "red", stream=sys.stderr, bold=True),
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
+
+
 __all__ = [
     "GitHubClient",
+    "cli_main",
     "LabelDefinition",
     "LabellingWorkflow",
     "UserQuit",

@@ -1,5 +1,6 @@
 """Subprocess helpers and git-based version detection."""
 
+import importlib.metadata
 import os
 import shlex
 import subprocess
@@ -31,8 +32,19 @@ def run(
 
 
 def get_script_version() -> str:
-    """Return a short git SHA for the script repository, or ``unknown``."""
+    """Return the installed package version, a git SHA, or ``unknown``.
 
+    Priority:
+    1. ``importlib.metadata`` version of the installed ``ai-labelling``
+       package, prefixed with ``v`` (e.g. ``v1.0.0``).
+    2. Short git SHA of the repository the source lives in.
+    3. The literal string ``unknown``.
+    """
+
+    try:
+        return "v" + importlib.metadata.version("ai-labelling")
+    except importlib.metadata.PackageNotFoundError:
+        pass
     try:
         result = run(
             (

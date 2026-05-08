@@ -1,5 +1,8 @@
 """Configuration constants for the labelling workflow."""
 
+REPO_URL = "https://github.com/whisperity/GenAI-Assisted-Labelling"
+"""Public GitHub URL for this tool's repository."""
+
 REPO_DETECTION_ORDER = ("upstream/push", "upstream", "origin")
 """Git remotes checked when inferring the current GitHub repository."""
 

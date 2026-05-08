@@ -3,7 +3,8 @@
 
 import unittest
 
-from ai_labelling.comment import format_comment_body
+from ai_labelling.comment import format_comment_body, _version_url
+from ai_labelling.config import REPO_URL
 from ai_labelling.models import LabelSuggestion
 
 
@@ -198,3 +199,41 @@ class CommentBodyTests(  # pylint: disable=too-many-public-methods
             allow_label_removals=False,
         )
         self.assertNotIn("**Suggested issue type:**", body)
+
+
+class VersionUrlTests(unittest.TestCase):
+    """Verify the version → GitHub URL mapping."""
+
+    def test_release_version_links_to_releases_tag(self):
+        url = _version_url("v1.0.0")
+        self.assertEqual(url, f"{REPO_URL}/releases/tag/v1.0.0")
+
+    def test_git_sha_links_to_tree(self):
+        url = _version_url("abc1234")
+        self.assertEqual(url, f"{REPO_URL}/tree/abc1234")
+
+    def test_unknown_links_to_repo_root(self):
+        url = _version_url("unknown")
+        self.assertEqual(url, REPO_URL)
+
+    def test_release_url_used_in_comment_body(self):
+        body = format_comment_body(
+            _suggestion(add=["bug"]),
+            applied_add=["bug"],
+            applied_remove=[],
+            model="m",
+            version="v1.0.0",
+            allow_label_removals=False,
+        )
+        self.assertIn(f"{REPO_URL}/releases/tag/v1.0.0", body)
+
+    def test_sha_url_used_in_comment_body(self):
+        body = format_comment_body(
+            _suggestion(add=["bug"]),
+            applied_add=["bug"],
+            applied_remove=[],
+            model="m",
+            version="abc1234",
+            allow_label_removals=False,
+        )
+        self.assertIn(f"{REPO_URL}/tree/abc1234", body)
