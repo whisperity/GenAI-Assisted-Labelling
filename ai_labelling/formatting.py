@@ -497,10 +497,17 @@ def print_changes_summary(  # pylint: disable=too-many-locals
         item = result.item
         suggestion = result.label_suggestion
         has_assignee = result.applied_assignee is not None
+        has_pr_unassigned = result.pr_unassigned
+        has_pr_assigned = result.pr_assigned_author is not None
         has_type = item.kind == "issue" and suggestion.issue_type is not None
         has_adds = bool(suggestion.add_labels)
         has_removes = allow_label_removals and bool(suggestion.remove_labels)
-        if not any([has_assignee, has_type, has_adds, has_removes]):
+        if not any(
+            [
+                has_assignee, has_pr_unassigned, has_pr_assigned,
+                has_type, has_adds, has_removes,
+            ]
+        ):
             continue
         state_colour = "green" if item.state.casefold() == "open" else "red"
         kind_display = "issue" if item.kind == "issue" else "PR"
@@ -521,6 +528,20 @@ def print_changes_summary(  # pylint: disable=too-many-locals
             )
             lines.append(
                 f"  {tag} {old_part} -> @{result.applied_assignee}"
+            )
+        if has_pr_unassigned:
+            old_part = (
+                ", ".join(f"@{a}" for a in item.assignees)
+                or "[none]"
+            )
+            lines.append(f"  {tag} {old_part} -> [unassigned]")
+        if has_pr_assigned:
+            old_part = (
+                ", ".join(f"@{a}" for a in item.assignees)
+                or "[none]"
+            )
+            lines.append(
+                f"  {tag} {old_part} -> @{result.pr_assigned_author}"
             )
         if has_type:
             old_type = item.issue_type or "[none]"

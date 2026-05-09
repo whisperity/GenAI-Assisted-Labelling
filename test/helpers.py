@@ -12,13 +12,14 @@ def make_item(
     state: str = "open",
     labels=None,
     assignees=None,
+    body: str = "Body text",
 ) -> WorkItem:
     """Create a small ``WorkItem`` fixture for tests."""
 
     return WorkItem(
         number=number,
         title=title,
-        body="Body text",
+        body=body,
         state=state,
         labels=list(labels or []),
         assignees=list(assignees or []),

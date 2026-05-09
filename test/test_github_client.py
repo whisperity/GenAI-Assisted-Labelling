@@ -10,6 +10,7 @@ from test.helpers import make_item
 from ai_labelling.github_client import (
     GitHubClient,
     _parse_gh_timing,
+    parse_closing_issues,
     work_item_from_search_result,
 )
 from ai_labelling.models import ClosingPR
@@ -843,3 +844,47 @@ class SetAssigneesTests(unittest.TestCase):
         self.assertIn("repos/owner/repo/issues/7", argv)
         body = __import__("json").loads(call_args.kwargs["input_text"])
         self.assertEqual(body["assignees"], ["alice"])
+
+
+class ParseClosingIssuesTests(unittest.TestCase):
+    """Verify GitHub closing-keyword extraction from PR bodies."""
+
+    def test_closes_single_issue(self):
+        self.assertEqual(parse_closing_issues("closes #42"), [42])
+
+    def test_fixes_single_issue(self):
+        self.assertEqual(parse_closing_issues("Fixes #7"), [7])
+
+    def test_resolves_single_issue(self):
+        self.assertEqual(parse_closing_issues("resolved #100"), [100])
+
+    def test_close_without_d_or_s(self):
+        self.assertEqual(parse_closing_issues("close #1"), [1])
+
+    def test_fix_without_suffix(self):
+        self.assertEqual(parse_closing_issues("fix #3"), [3])
+
+    def test_resolve_without_suffix(self):
+        self.assertEqual(parse_closing_issues("resolve #5"), [5])
+
+    def test_fixed_past_tense(self):
+        self.assertEqual(parse_closing_issues("fixed #9"), [9])
+
+    def test_multiple_keywords(self):
+        result = parse_closing_issues("Closes #1 and also fixes #2")
+        self.assertEqual(result, [1, 2])
+
+    def test_case_insensitive(self):
+        self.assertEqual(parse_closing_issues("CLOSES #99"), [99])
+
+    def test_no_keywords_returns_empty(self):
+        self.assertEqual(
+            parse_closing_issues("See also #5, related to #6"), []
+        )
+
+    def test_empty_body_returns_empty(self):
+        self.assertEqual(parse_closing_issues(""), [])
+
+    def test_keyword_in_multiline_body(self):
+        body = "Some description.\n\ncloses #10\n\nMore text."
+        self.assertEqual(parse_closing_issues(body), [10])

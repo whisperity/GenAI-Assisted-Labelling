@@ -323,6 +323,25 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     github_group.add_argument(
+        "--unassign-pr-if-solving-issue",
+        dest="unassign_pr_if_solving_issue",
+        action="store_true",
+        help=(
+            "For pull requests that reference a closing keyword for one or "
+            "more issues (e.g. 'closes #1'), suggest removing all current "
+            "assignees from the pull request."
+        ),
+    )
+    github_group.add_argument(
+        "--assign-pr-if-not-solving-issue",
+        dest="assign_pr_if_not_solving_issue",
+        action="store_true",
+        help=(
+            "For pull requests that do not reference any closing keyword "
+            "for an issue, suggest assigning the pull request to its author."
+        ),
+    )
+    github_group.add_argument(
         "--id",
         type=positive_int,
         metavar="NUMBER",
@@ -351,6 +370,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
     parser.set_defaults(
         assign_issue_to_solver=False,
+        unassign_pr_if_solving_issue=False,
+        assign_pr_if_not_solving_issue=False,
         include_issues=True,
         include_prs=False,
         include_open=True,

@@ -61,6 +61,8 @@ def format_comment_body(
     applied_issue_type: Optional[str] = None,
     closing_pr: Optional[ClosingPR] = None,
     applied_assignee: Optional[str] = None,
+    pr_unassigned: bool = False,
+    pr_assigned_author: Optional[str] = None,
 ) -> str:
     """Build the Markdown comment body for a labelling action."""
 
@@ -79,6 +81,20 @@ def format_comment_body(
         lines += ["**Reasoning:**", ""]
         for line in original_suggestion.reason.strip().splitlines():
             lines.append(f"> {line}")
+        lines.append("")
+
+    if pr_unassigned:
+        lines.append(
+            "**Assignee change:** removed all assignees from this PR "
+            "(it closes an issue)"
+        )
+        lines.append("")
+
+    if pr_assigned_author is not None:
+        lines.append(
+            f"**Assignee change:** `@{pr_assigned_author}` assigned "
+            "(author of PR, closes no issue)"
+        )
         lines.append("")
 
     if closing_pr is not None:

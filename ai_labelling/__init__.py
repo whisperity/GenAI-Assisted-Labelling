@@ -99,6 +99,8 @@ def review_and_apply_suggestions(
     comment_reason: bool = False,
     valid_issue_types: Sequence[IssueTypeDefinition] = (),
     assign_issue_to_solver: bool = False,
+    unassign_pr_if_solving_issue: bool = False,
+    assign_pr_if_not_solving_issue: bool = False,
 ) -> None:
     """Review AI suggestions and optionally apply label changes."""
 
@@ -112,6 +114,8 @@ def review_and_apply_suggestions(
         comment_reason=comment_reason,
         valid_issue_types=valid_issue_types,
         assign_issue_to_solver=assign_issue_to_solver,
+        unassign_pr_if_solving_issue=unassign_pr_if_solving_issue,
+        assign_pr_if_not_solving_issue=assign_pr_if_not_solving_issue,
     )
 
 
@@ -146,6 +150,8 @@ def main() -> int:
             comment_reason=args.comment_reason,
             valid_issue_types=valid_issue_types,
             assign_issue_to_solver=args.assign_issue_to_solver,
+            unassign_pr_if_solving_issue=args.unassign_pr_if_solving_issue,
+            assign_pr_if_not_solving_issue=args.assign_pr_if_not_solving_issue,
         )
         return 0
 
@@ -198,6 +204,8 @@ def main() -> int:
         comment_reason=args.comment_reason,
         valid_issue_types=valid_issue_types,
         assign_issue_to_solver=args.assign_issue_to_solver,
+        unassign_pr_if_solving_issue=args.unassign_pr_if_solving_issue,
+        assign_pr_if_not_solving_issue=args.assign_pr_if_not_solving_issue,
     )
     return 0
 

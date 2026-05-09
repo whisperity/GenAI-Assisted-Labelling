@@ -89,6 +89,34 @@ class ParserDefaultsTests(unittest.TestCase):
         args = build_argument_parser().parse_args(["--comment-reason"])
         self.assertTrue(args.comment_reason)
 
+    def test_assign_issue_to_solver_defaults_to_false(self):
+        args = build_argument_parser().parse_args([])
+        self.assertFalse(args.assign_issue_to_solver)
+
+    def test_assign_issue_to_solver_flag_sets_true(self):
+        args = build_argument_parser().parse_args(["--assign-issue-to-solver"])
+        self.assertTrue(args.assign_issue_to_solver)
+
+    def test_unassign_pr_if_solving_issue_defaults_to_false(self):
+        args = build_argument_parser().parse_args([])
+        self.assertFalse(args.unassign_pr_if_solving_issue)
+
+    def test_unassign_pr_if_solving_issue_flag_sets_true(self):
+        args = build_argument_parser().parse_args(
+            ["--unassign-pr-if-solving-issue"]
+        )
+        self.assertTrue(args.unassign_pr_if_solving_issue)
+
+    def test_assign_pr_if_not_solving_issue_defaults_to_false(self):
+        args = build_argument_parser().parse_args([])
+        self.assertFalse(args.assign_pr_if_not_solving_issue)
+
+    def test_assign_pr_if_not_solving_issue_flag_sets_true(self):
+        args = build_argument_parser().parse_args(
+            ["--assign-pr-if-not-solving-issue"]
+        )
+        self.assertTrue(args.assign_pr_if_not_solving_issue)
+
     def test_id_defaults_to_none(self):
         args = build_argument_parser().parse_args([])
         self.assertIsNone(args.id)

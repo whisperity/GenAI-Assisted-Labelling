@@ -192,6 +192,8 @@ class AppliedChanges:
     issue_type: Optional[str] = None
     closing_pr: Optional[ClosingPR] = None
     assignee: Optional[str] = None
+    pr_unassigned: bool = False
+    pr_assigned_author: Optional[str] = None
 
     def has_label_or_type_changes(self) -> bool:
         """Return True when labels or issue type were changed."""
@@ -203,7 +205,12 @@ class AppliedChanges:
     def has_any_changes(self) -> bool:
         """Return True when any change was applied."""
 
-        return self.has_label_or_type_changes() or self.assignee is not None
+        return (
+            self.has_label_or_type_changes()
+            or self.assignee is not None
+            or self.pr_unassigned
+            or self.pr_assigned_author is not None
+        )
 
 
 @dataclass(frozen=True)
@@ -214,6 +221,8 @@ class SuggestionResult:
     label_suggestion: LabelSuggestion
     model: str = ""
     applied_assignee: Optional[str] = None
+    pr_unassigned: bool = False
+    pr_assigned_author: Optional[str] = None
 
 
 class UserQuit(Exception):

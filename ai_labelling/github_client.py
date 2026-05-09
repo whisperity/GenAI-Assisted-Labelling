@@ -28,6 +28,16 @@ _TS_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\.\d+)? ([+-]\d{4})"
 )
 _DUR_RE = re.compile(r"([\d.]+)s$")
+_CLOSING_RE = re.compile(
+    r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)",
+    re.IGNORECASE,
+)
+
+
+def parse_closing_issues(body: str) -> List[int]:
+    """Return issue numbers referenced by GitHub closing keywords in *body*."""
+
+    return [int(m.group(1)) for m in _CLOSING_RE.finditer(body)]
 
 
 def _parse_gh_timing(stderr: str) -> Tuple[Optional[str], str]:

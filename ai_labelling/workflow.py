@@ -11,6 +11,7 @@ from typing import Callable, List, Optional, Sequence
 from ai_labelling.args import default_cutoff, parse_model_spec
 from ai_labelling.backends import get_backend_for_provider
 from ai_labelling.comment import format_comment_body
+from ai_labelling.github_client import parse_closing_issues
 from ai_labelling.config import (
     DEFAULT_DATE_CUTOFF,
     FORCE_WARNING_DELAY_SECONDS,
@@ -193,13 +194,14 @@ class LabellingWorkflow:
         assignees: List[str],
         input_fn: InputFn = input,
     ) -> None:
-        """Replace assignees on an issue, offering retries on failure."""
+        """Replace assignees on an issue or PR, offering retries on failure."""
 
+        kind_display = item.kind.upper()
         _retry_until_success(
             lambda: self.github_client.set_assignees(repo, item, assignees),
-            context=f"Setting assignees on ISSUE #{item.number}",
+            context=f"Setting assignees on {kind_display} #{item.number}",
             retry_prompt=(
-                f"Retry setting assignees on ISSUE #{item.number}? "
+                f"Retry setting assignees on {kind_display} #{item.number}? "
             ),
             default_yes=True,
             input_fn=input_fn,
@@ -475,6 +477,8 @@ class LabellingWorkflow:
         comment_reason: bool = False,
         valid_issue_types: Sequence[IssueTypeDefinition] = (),
         assign_issue_to_solver: bool = False,
+        unassign_pr_if_solving_issue: bool = False,
+        assign_pr_if_not_solving_issue: bool = False,
     ) -> None:
         """Review AI suggestions and optionally apply label changes."""
 
@@ -498,6 +502,8 @@ class LabellingWorkflow:
                 issue_type_map=issue_type_map,
                 input_fn=input_fn,
                 assign_issue_to_solver=assign_issue_to_solver,
+                unassign_pr_if_solving_issue=unassign_pr_if_solving_issue,
+                assign_pr_if_not_solving_issue=assign_pr_if_not_solving_issue,
             )
             if applied.has_any_changes():
                 summary_results.append(
@@ -511,6 +517,8 @@ class LabellingWorkflow:
                         ),
                         model=result.model,
                         applied_assignee=applied.assignee,
+                        pr_unassigned=applied.pr_unassigned,
+                        pr_assigned_author=applied.pr_assigned_author,
                     )
                 )
             if comment_reason:
@@ -540,6 +548,8 @@ class LabellingWorkflow:
         comment_reason: bool = False,
         valid_issue_types: Sequence[IssueTypeDefinition] = (),
         assign_issue_to_solver: bool = False,
+        unassign_pr_if_solving_issue: bool = False,
+        assign_pr_if_not_solving_issue: bool = False,
         input_fn: InputFn = input,
     ) -> None:
         """Interactively handle items by number until the user quits.
@@ -631,6 +641,10 @@ class LabellingWorkflow:
                     issue_type_map=issue_type_map,
                     input_fn=input_fn,
                     assign_issue_to_solver=assign_issue_to_solver,
+                    unassign_pr_if_solving_issue=unassign_pr_if_solving_issue,
+                    assign_pr_if_not_solving_issue=(
+                        assign_pr_if_not_solving_issue
+                    ),
                 )
             except UserQuit:
                 break
@@ -646,6 +660,8 @@ class LabellingWorkflow:
                         ),
                         model=result.model,
                         applied_assignee=applied.assignee,
+                        pr_unassigned=applied.pr_unassigned,
+                        pr_assigned_author=applied.pr_assigned_author,
                     )
                 )
             if comment_reason:
@@ -662,6 +678,7 @@ class LabellingWorkflow:
         )
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments
+    # pylint: disable=too-many-locals
     def _apply_one_result(
         self,
         repo: str,
@@ -672,6 +689,8 @@ class LabellingWorkflow:
         issue_type_map: IssueTypeMap,
         input_fn: InputFn,
         assign_issue_to_solver: bool = False,
+        unassign_pr_if_solving_issue: bool = False,
+        assign_pr_if_not_solving_issue: bool = False,
     ) -> AppliedChanges:
         """Collect and apply all decisions for one result.
 
@@ -687,6 +706,27 @@ class LabellingWorkflow:
         accepted_assignee = self._collect_assignee_decision(
             result.item,
             closing_pr=closing_pr,
+            force=force,
+            input_fn=input_fn,
+        )
+
+        pr_closing_issues = (
+            parse_closing_issues(result.item.body)
+            if (
+                unassign_pr_if_solving_issue or assign_pr_if_not_solving_issue
+            ) and result.item.kind == "pr"
+            else []
+        )
+        accepted_pr_unassign = self._collect_pr_unassign_decision(
+            result.item,
+            closing_issues=pr_closing_issues,
+            force=force,
+            input_fn=input_fn,
+        )
+        accepted_pr_assign = self._collect_pr_assign_decision(
+            result.item,
+            has_closing_issues=bool(pr_closing_issues),
+            enabled=assign_pr_if_not_solving_issue,
             force=force,
             input_fn=input_fn,
         )
@@ -723,6 +763,22 @@ class LabellingWorkflow:
             )
             applied_assignee = closing_pr.author_login
 
+        applied_pr_unassigned = False
+        if accepted_pr_unassign:
+            self.set_assignees_with_retry(
+                repo, result.item, [], input_fn=input_fn,
+            )
+            applied_pr_unassigned = True
+
+        applied_pr_assigned_author: Optional[str] = None
+        if accepted_pr_assign:
+            self.set_assignees_with_retry(
+                repo, result.item,
+                [result.item.author_login],
+                input_fn=input_fn,
+            )
+            applied_pr_assigned_author = result.item.author_login
+
         applied_issue_type: Optional[str] = None
         if accepted_type is not None:
             self.set_issue_type_with_retry(
@@ -748,6 +804,8 @@ class LabellingWorkflow:
             issue_type=applied_issue_type,
             closing_pr=closing_pr,
             assignee=applied_assignee,
+            pr_unassigned=applied_pr_unassigned,
+            pr_assigned_author=applied_pr_assigned_author,
         )
 
     def _find_closing_pr(
@@ -786,6 +844,58 @@ class LabellingWorkflow:
             f"@{closing_pr.author_login} "
             f"(author of PR #{closing_pr.pr_number} that closed it)? "
             "[y/n/q/?] ",
+            allow_apply_all=False,
+            input_fn=input_fn,
+        )
+        return answer != "N"
+
+    def _collect_pr_unassign_decision(
+        self,
+        item: WorkItem,
+        *,
+        closing_issues: List[int],
+        force: bool,
+        input_fn: InputFn,
+    ) -> bool:
+        """Prompt to unassign PR closing issues; return True if accepted."""
+
+        if item.kind != "pr" or not item.assignees or not closing_issues:
+            return False
+        if force:
+            return True
+        issue_word = "issue" if len(closing_issues) == 1 else "issues"
+        issue_nums = ", ".join(f"#{n}" for n in closing_issues)
+        assignee_part = ", ".join(f"@{a}" for a in item.assignees)
+        answer = prompt_confirmation(
+            f"Unassign PR #{item.number} (closes {issue_word} {issue_nums}) "
+            f"from {assignee_part}? [y/n/q/?] ",
+            allow_apply_all=False,
+            input_fn=input_fn,
+        )
+        return answer != "N"
+
+    def _collect_pr_assign_decision(
+        self,
+        item: WorkItem,
+        *,
+        has_closing_issues: bool,
+        enabled: bool,
+        force: bool,
+        input_fn: InputFn,
+    ) -> bool:
+        """Prompt to assign a PR to its author when it closes no issues."""
+
+        if not enabled or item.kind != "pr" or has_closing_issues:
+            return False
+        if item.author_login.casefold() in {
+            a.casefold() for a in item.assignees
+        }:
+            return False
+        if force:
+            return True
+        answer = prompt_confirmation(
+            f"Assign PR #{item.number} to @{item.author_login} "
+            f"(author, PR closes no issue)? [y/n/q/?] ",
             allow_apply_all=False,
             input_fn=input_fn,
         )
@@ -890,6 +1000,8 @@ class LabellingWorkflow:
             applied_issue_type=applied.issue_type,
             closing_pr=applied.closing_pr,
             applied_assignee=applied.assignee,
+            pr_unassigned=applied.pr_unassigned,
+            pr_assigned_author=applied.pr_assigned_author,
         )
         if get_debug_level() >= 2:
             print(

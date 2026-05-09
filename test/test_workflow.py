@@ -1590,3 +1590,343 @@ class AssignIssueToSolverTests(unittest.TestCase):
             )
         pr_mock.assert_not_called()
         assign_mock.assert_not_called()
+
+
+class UnassignPRIfSolvingIssueTests(unittest.TestCase):
+    """Verify the --unassign-pr-if-solving-issue decision and apply logic."""
+
+    # pylint: disable=protected-access
+
+    def setUp(self):
+        self.workflow = LabellingWorkflow()
+
+    def _make_pr_result(self, assignees=None, body="closes #1"):
+        item = make_item(
+            2, "Fix", kind="pr", state="open",
+            assignees=["dev"] if assignees is None else assignees,
+            body=body,
+        )
+        return SuggestionResult(
+            item=item,
+            label_suggestion=LabelSuggestion(
+                add_labels=[], remove_labels=[], reason="r"
+            ),
+        )
+
+    def test_collect_pr_unassign_skips_issues(self):
+        item = make_item(1, "T", kind="issue", assignees=["dev"])
+        result = self.workflow._collect_pr_unassign_decision(
+            item,
+            closing_issues=[1],
+            force=False,
+            input_fn=lambda _: "y",
+        )
+        self.assertFalse(result)
+
+    def test_collect_pr_unassign_skips_empty_assignees(self):
+        item = make_item(2, "T", kind="pr", assignees=[])
+        result = self.workflow._collect_pr_unassign_decision(
+            item,
+            closing_issues=[1],
+            force=False,
+            input_fn=lambda _: "y",
+        )
+        self.assertFalse(result)
+
+    def test_collect_pr_unassign_skips_no_closing_issues(self):
+        item = make_item(2, "T", kind="pr", assignees=["dev"])
+        result = self.workflow._collect_pr_unassign_decision(
+            item,
+            closing_issues=[],
+            force=False,
+            input_fn=lambda _: "y",
+        )
+        self.assertFalse(result)
+
+    def test_collect_pr_unassign_force_returns_true(self):
+        item = make_item(2, "T", kind="pr", assignees=["dev"])
+        result = self.workflow._collect_pr_unassign_decision(
+            item,
+            closing_issues=[1],
+            force=True,
+            input_fn=lambda _: (_ for _ in ()).throw(
+                AssertionError("prompt must not fire")
+            ),
+        )
+        self.assertTrue(result)
+
+    def test_collect_pr_unassign_y_returns_true(self):
+        item = make_item(2, "T", kind="pr", assignees=["dev"])
+        result = self.workflow._collect_pr_unassign_decision(
+            item,
+            closing_issues=[1],
+            force=False,
+            input_fn=lambda _: "y",
+        )
+        self.assertTrue(result)
+
+    def test_collect_pr_unassign_n_returns_false(self):
+        item = make_item(2, "T", kind="pr", assignees=["dev"])
+        result = self.workflow._collect_pr_unassign_decision(
+            item,
+            closing_issues=[1],
+            force=False,
+            input_fn=lambda _: "n",
+        )
+        self.assertFalse(result)
+
+    def test_apply_unassigns_pr_when_enabled_and_accepted(self):
+        suggestion_results = [self._make_pr_result()]
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "set_assignees_with_retry"
+                ) as assign_mock:
+            self.workflow.review_and_apply_suggestions(
+                "owner/repo",
+                suggestion_results,
+                False,
+                False,
+                unassign_pr_if_solving_issue=True,
+                input_fn=lambda _: "y",
+            )
+        assign_mock.assert_called_once()
+        self.assertEqual(assign_mock.call_args.args[2], [])
+
+    def test_apply_skips_unassign_when_user_declines(self):
+        suggestion_results = [self._make_pr_result()]
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "set_assignees_with_retry"
+                ) as assign_mock:
+            self.workflow.review_and_apply_suggestions(
+                "owner/repo",
+                suggestion_results,
+                False,
+                False,
+                unassign_pr_if_solving_issue=True,
+                input_fn=lambda _: "n",
+            )
+        assign_mock.assert_not_called()
+
+    def test_apply_no_unassign_when_flag_off(self):
+        suggestion_results = [self._make_pr_result()]
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "set_assignees_with_retry"
+                ) as assign_mock:
+            self.workflow.review_and_apply_suggestions(
+                "owner/repo", suggestion_results, True, False,
+            )
+        assign_mock.assert_not_called()
+
+    def test_apply_skips_pr_without_closing_keyword(self):
+        suggestion_results = [self._make_pr_result(body="No closing keywords")]
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "set_assignees_with_retry"
+                ) as assign_mock:
+            self.workflow.review_and_apply_suggestions(
+                "owner/repo",
+                suggestion_results,
+                True,
+                False,
+                unassign_pr_if_solving_issue=True,
+            )
+        assign_mock.assert_not_called()
+
+    def test_apply_skips_pr_without_assignees(self):
+        suggestion_results = [self._make_pr_result(assignees=[])]
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "set_assignees_with_retry"
+                ) as assign_mock:
+            self.workflow.review_and_apply_suggestions(
+                "owner/repo",
+                suggestion_results,
+                True,
+                False,
+                unassign_pr_if_solving_issue=True,
+            )
+        assign_mock.assert_not_called()
+
+
+class AssignPRIfNotSolvingIssueTests(unittest.TestCase):
+    """Verify the --assign-pr-if-not-solving-issue decision and apply logic."""
+
+    # pylint: disable=protected-access
+
+    def setUp(self):
+        self.workflow = LabellingWorkflow()
+
+    def _make_pr_result(self, assignees=None, body="No closing keywords"):
+        item = make_item(
+            3, "Refactor", kind="pr", state="open",
+            assignees=[] if assignees is None else assignees,
+            body=body,
+        )
+        return SuggestionResult(
+            item=item,
+            label_suggestion=LabelSuggestion(
+                add_labels=[], remove_labels=[], reason="r"
+            ),
+        )
+
+    def test_collect_pr_assign_skips_issues(self):
+        item = make_item(1, "T", kind="issue")
+        result = self.workflow._collect_pr_assign_decision(
+            item,
+            has_closing_issues=False,
+            enabled=True,
+            force=False,
+            input_fn=lambda _: "y",
+        )
+        self.assertFalse(result)
+
+    def test_collect_pr_assign_skips_when_disabled(self):
+        item = make_item(3, "T", kind="pr")
+        result = self.workflow._collect_pr_assign_decision(
+            item,
+            has_closing_issues=False,
+            enabled=False,
+            force=False,
+            input_fn=lambda _: "y",
+        )
+        self.assertFalse(result)
+
+    def test_collect_pr_assign_skips_when_closes_issue(self):
+        item = make_item(3, "T", kind="pr")
+        result = self.workflow._collect_pr_assign_decision(
+            item,
+            has_closing_issues=True,
+            enabled=True,
+            force=False,
+            input_fn=lambda _: "y",
+        )
+        self.assertFalse(result)
+
+    def test_collect_pr_assign_skips_when_author_already_assigned(self):
+        item = make_item(3, "T", kind="pr", assignees=["octocat"])
+        result = self.workflow._collect_pr_assign_decision(
+            item,
+            has_closing_issues=False,
+            enabled=True,
+            force=False,
+            input_fn=lambda _: (_ for _ in ()).throw(
+                AssertionError("prompt must not fire")
+            ),
+        )
+        self.assertFalse(result)
+
+    def test_collect_pr_assign_author_check_is_case_insensitive(self):
+        item = make_item(3, "T", kind="pr", assignees=["Octocat"])
+        result = self.workflow._collect_pr_assign_decision(
+            item,
+            has_closing_issues=False,
+            enabled=True,
+            force=True,
+            input_fn=lambda _: "y",
+        )
+        self.assertFalse(result)
+
+    def test_collect_pr_assign_force_returns_true(self):
+        item = make_item(3, "T", kind="pr")
+        result = self.workflow._collect_pr_assign_decision(
+            item,
+            has_closing_issues=False,
+            enabled=True,
+            force=True,
+            input_fn=lambda _: (_ for _ in ()).throw(
+                AssertionError("prompt must not fire")
+            ),
+        )
+        self.assertTrue(result)
+
+    def test_collect_pr_assign_y_returns_true(self):
+        item = make_item(3, "T", kind="pr")
+        result = self.workflow._collect_pr_assign_decision(
+            item,
+            has_closing_issues=False,
+            enabled=True,
+            force=False,
+            input_fn=lambda _: "y",
+        )
+        self.assertTrue(result)
+
+    def test_collect_pr_assign_n_returns_false(self):
+        item = make_item(3, "T", kind="pr")
+        result = self.workflow._collect_pr_assign_decision(
+            item,
+            has_closing_issues=False,
+            enabled=True,
+            force=False,
+            input_fn=lambda _: "n",
+        )
+        self.assertFalse(result)
+
+    def test_apply_assigns_pr_author_when_enabled_and_accepted(self):
+        suggestion_results = [self._make_pr_result()]
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "set_assignees_with_retry"
+                ) as assign_mock:
+            self.workflow.review_and_apply_suggestions(
+                "owner/repo",
+                suggestion_results,
+                False,
+                False,
+                assign_pr_if_not_solving_issue=True,
+                input_fn=lambda _: "y",
+            )
+        assign_mock.assert_called_once()
+        self.assertIn("octocat", assign_mock.call_args.args[2])
+
+    def test_apply_skips_assign_when_user_declines(self):
+        suggestion_results = [self._make_pr_result()]
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "set_assignees_with_retry"
+                ) as assign_mock:
+            self.workflow.review_and_apply_suggestions(
+                "owner/repo",
+                suggestion_results,
+                False,
+                False,
+                assign_pr_if_not_solving_issue=True,
+                input_fn=lambda _: "n",
+            )
+        assign_mock.assert_not_called()
+
+    def test_apply_no_assign_when_flag_off(self):
+        suggestion_results = [self._make_pr_result()]
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "set_assignees_with_retry"
+                ) as assign_mock:
+            self.workflow.review_and_apply_suggestions(
+                "owner/repo", suggestion_results, True, False,
+            )
+        assign_mock.assert_not_called()
+
+    def test_apply_skips_pr_with_closing_keyword(self):
+        suggestion_results = [self._make_pr_result(body="closes #5")]
+        with mock.patch.object(self.workflow, "print_summary"), \
+                mock.patch("ai_labelling.workflow.print_changes_summary"), \
+                mock.patch.object(
+                    self.workflow, "set_assignees_with_retry"
+                ) as assign_mock:
+            self.workflow.review_and_apply_suggestions(
+                "owner/repo",
+                suggestion_results,
+                True,
+                False,
+                assign_pr_if_not_solving_issue=True,
+            )
+        assign_mock.assert_not_called()
