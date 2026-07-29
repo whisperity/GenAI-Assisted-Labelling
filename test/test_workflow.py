@@ -710,7 +710,7 @@ class WorkflowTests(  # pylint: disable=too-many-public-methods
 
     def test_collect_items_id_mode_bypasses_search(self):
         item = make_item(7, "Direct lookup")
-        args = argparse.Namespace(id=7)
+        args = argparse.Namespace(id=[7])
 
         with mock.patch.object(
             self.workflow.github_client,
@@ -724,6 +724,30 @@ class WorkflowTests(  # pylint: disable=too-many-public-methods
         get_mock.assert_called_once_with("llvm/llvm-project", 7)
         search_mock.assert_not_called()
         self.assertEqual(result, [item])
+
+    def test_collect_items_id_mode_handles_multiple_ids(self):
+        item_a = make_item(1234, "First")
+        item_b = make_item(5678, "Second")
+        args = argparse.Namespace(id=[1234, 5678])
+
+        with mock.patch.object(
+            self.workflow.github_client,
+            "get_item",
+            side_effect=[item_a, item_b],
+        ) as get_mock, mock.patch.object(
+            self.workflow.github_client, "search_items"
+        ) as search_mock:
+            result = self.workflow.collect_items("llvm/llvm-project", args)
+
+        self.assertEqual(
+            get_mock.call_args_list,
+            [
+                mock.call("llvm/llvm-project", 1234),
+                mock.call("llvm/llvm-project", 5678),
+            ],
+        )
+        search_mock.assert_not_called()
+        self.assertEqual(result, [item_a, item_b])
 
     def test_collect_items_id_none_falls_through_to_normal_search(self):
         args = argparse.Namespace(

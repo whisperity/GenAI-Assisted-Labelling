@@ -344,12 +344,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
     github_group.add_argument(
         "--id",
         type=positive_int,
+        nargs="+",
         metavar="NUMBER",
         help=(
-            "Fetch and handle exactly one issue or pull request by its "
-            "number. The tool automatically detects whether the number "
-            "refers to an issue or a pull request. **ALL** filter options "
-            "are ignored in this mode."
+            "Fetch and handle one or more issues or pull requests by their "
+            "number, e.g. '--id 1234' or '--id 1234 5678'. The tool "
+            "automatically detects whether each number refers to an issue "
+            "or a pull request. **ALL** filter options are ignored in this "
+            "mode."
         ),
     )
 

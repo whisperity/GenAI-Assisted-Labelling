@@ -123,7 +123,13 @@ class ParserDefaultsTests(unittest.TestCase):
 
     def test_id_flag_accepts_positive_integer(self):
         args = build_argument_parser().parse_args(["--id", "42"])
-        self.assertEqual(args.id, 42)
+        self.assertEqual(args.id, [42])
+
+    def test_id_flag_accepts_multiple_positive_integers(self):
+        args = build_argument_parser().parse_args(
+            ["--id", "1234", "5678", "4444", "8888"]
+        )
+        self.assertEqual(args.id, [1234, 5678, 4444, 8888])
 
     def test_id_flag_rejects_zero(self):
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
@@ -132,6 +138,10 @@ class ParserDefaultsTests(unittest.TestCase):
     def test_id_flag_rejects_negative(self):
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
             build_argument_parser().parse_args(["--id", "-1"])
+
+    def test_id_flag_rejects_mixed_valid_and_invalid(self):
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            build_argument_parser().parse_args(["--id", "42", "0"])
 
     def test_help_mentions_id_flag(self):
         help_text = build_argument_parser().format_help()

@@ -1030,7 +1030,10 @@ class LabellingWorkflow:
         """Collect and sort matching issues and pull requests."""
 
         if getattr(args, "id", None) is not None:
-            return [self.github_client.get_item(repo, args.id)]
+            return [
+                self.github_client.get_item(repo, number)
+                for number in args.id
+            ]
 
         if not args.include_issues and not args.include_prs:
             return []
